@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Starfall</title>
+<!-- Multiple sizes for different devices -->
+  <link rel="icon" type="image/png" href="favicon.png">
+  <link rel="stylesheet" href="assets/css/styles.css">
+</head>
+<body>
+<div id="shipBuilder">
+<h2>⚡ SHIP BUILDER ⚡</h2>
+<div id="builderPreview"></div>
+<div class="builder-section">
+<h4>Stage 1: Core Body</h4>
+<div class="builder-option" onclick="selectOption('body','sleek', event)">
+  Sleek Fighter
+  <span class="tooltip">Speed +30%, Health -20%</span>
+</div>
+<div class="builder-option" onclick="selectOption('body','heavy', event)">
+  Heavy Cargo
+  <span class="tooltip">Health +50%, Speed -20%</span>
+</div>
+<div class="builder-option" onclick="selectOption('body','balanced', event)">
+  Balanced
+  <span class="tooltip">Neutral stats</span>
+</div>
+</div>
+<div class="builder-section">
+<h4>Stage 2: Fuel Tank / Boosters</h4>
+<div class="builder-option" onclick="selectOption('tank','standard', event)">
+  Standard Tank
+  <span class="tooltip">Normal acceleration</span>
+</div>
+<div class="builder-option" onclick="selectOption('tank','turbo', event)">
+  Turbo Boosters
+  <span class="tooltip">Speed +33%, Fuel -30%</span>
+</div>
+<div class="builder-option" onclick="selectOption('tank','economy', event)">
+  Economy Mode
+  <span class="tooltip">Speed -25%, Fuel +50%</span>
+</div>
+</div>
+<div class="builder-section">
+<h4>Stage 3: Engine / Weapon</h4>
+<div class="builder-option" onclick="selectOption('engine','pulse', event)">
+  Pulse Cannon 🔵
+  <span class="tooltip">Fast fire, low damage</span>
+</div>
+<div class="builder-option" onclick="selectOption('engine','plasma', event)">
+  Plasma Rifle 🔴
+  <span class="tooltip">Medium fire, med damage</span>
+</div>
+<div class="builder-option" onclick="selectOption('engine','missile', event)">
+  Missile Launcher 💣
+  <span class="tooltip">Slow fire, high damage</span>
+</div>
+</div>
+<div class="builder-section">
+<h4>Ship Class</h4>
+<div class="builder-option" onclick="selectOption('shipClass','fighter', event)">
+  Fighter
+  <span class="tooltip">Fast but fragile</span>
+</div>
+<div class="builder-option" onclick="selectOption('shipClass','tank', event)">
+  Tank
+  <span class="tooltip">Heavy armor, slow</span>
+</div>
+<div class="builder-option" onclick="selectOption('shipClass','balanced', event)">
+  Balanced
+  <span class="tooltip">All-rounder</span>
+</div>
+<div class="builder-option" onclick="selectOption('shipClass','drone', event)">
+  Drone Carrier
+  <span class="tooltip">Carries drones (future)</span>
+</div>
+</div>
+<button id="startBtn" onclick="startGame()">START MISSION</button>
+</div>
+
+<div id="shopOverlay" style="display: none;">
+<div class="shopPanel">
+<h2>⭐ SPACE SHOP ⭐</h2>
+<div id="shopItems"></div>
+<button id="shopClose" onclick="closeShop()">CLOSE SHOP</button>
+</div>
+</div>
+
+<!-- Mineral Shop Overlay (uses same styling) -->
+<div id="mineralOverlay" style="display:none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 160; flex-direction: column; justify-content: center; align-items: center;">
+  <div class="shopPanel">
+    <h2>⛏️ MINERAL EXCHANGE</h2>
+    <div id="mineralItems"></div>
+    <button id="mineralClose" onclick="closeMineralShop()">CLOSE</button>
+  </div>
+</div>
+
+<!-- Modules Overlay -->
+<div id="moduleOverlay" style="display:none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 160; flex-direction: column; justify-content: center; align-items: center;">
+  <div class="shopPanel">
+    <h2>🔧 MODULE STORE</h2>
+    <div id="moduleItems"></div>
+    <button onclick="closeModules()">CLOSE</button>
+  </div>
+</div>
+
+<!-- Tech Tree Overlay -->
+<div id="techOverlay" style="display:none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 160; flex-direction: column; justify-content: center; align-items: center;">
+  <div class="shopPanel">
+    <h2>🔬 TECH TREE</h2>
+    <div id="techItems"></div>
+    <button onclick="closeTechTree()">CLOSE</button>
+  </div>
+</div>
+
+<div id="gameOverOverlay" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); display: none; z-index: 200; flex-direction: column; justify-content: center; align-items: center;">
+<h1 style="color: #ff0000; font-size: 60px; margin: 20px; text-shadow: 0 0 20px #ff0000;">☠️ MISSION FAILED ☠️</h1>
+<div id="gameOverStats" style="color: #ffff00; font-size: 20px; text-align: center; margin: 30px; background: rgba(0,0,20,0.8); padding: 30px; border-radius: 10px; border: 2px solid #ff0000;">
+<p id="finalScore">Final Score: 0</p>
+<p id="finalKills">Final Kills: 0</p>
+<p id="deathMessage">Your ship has been destroyed!</p>
+</div>
+<button onclick="restartGame()" style="padding: 15px 40px; font-size: 18px; background: #00ff00; color: black; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; margin: 10px; transition: 0.2s;" onmouseover="this.style.background='#00aaff'" onmouseout="this.style.background='#00ff00'">RESTART MISSION</button>
+</div>
+
+<!-- Mission Panel -->
+<div id="missionPanel" style="display: none;">
+  <div class="mission-header">📋 ACTIVE MISSIONS</div>
+  <div id="missionList"></div>
+</div>
+
+<!-- Achievement Notification -->
+<div id="achievementNotif">
+  <div class="achievement-icon" id="achievementIcon">🏆</div>
+  <div class="achievement-name" id="achievementName">Achievement Unlocked!</div>
+  <div class="achievement-desc" id="achievementDesc">Description here</div>
+</div>
+
+<!-- Upgrade Panel -->
+<div id="upgradePanel" style="display: none;">
+  <div class="upgrade-header">⚙️ UPGRADES (Pts: <span id="upgradePoints">0</span>)</div>
+  <div id="upgradeList"></div>
+</div>
+
+<!-- Tutorial Overlay -->
+<div id="tutorialOverlay">
+  <div class="tutorial-box">
+    <div class="tutorial-title" id="tutorialTitle">Welcome to Starfall</div>
+    <div class="tutorial-text" id="tutorialText">Learn the basics of piloting your ship.</div>
+    <div class="tutorial-controls" id="tutorialControls"></div>
+    <button class="tutorial-btn" onclick="nextTutorial()">Next →</button>
+    <button class="tutorial-btn" onclick="skipTutorial()">Skip</button>
+  </div>
+</div>
+
+<!-- Pause Overlay -->
+<div id="pauseOverlay" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); display: none; z-index: 250; flex-direction: column; justify-content: center; align-items: center;">
+  <div style="background: rgba(0,20,40,0.95); border: 3px solid #00ffff; border-radius: 12px; padding: 40px; text-align: center;">
+    <h1 style="color: #00ffff; font-size: 48px; margin-bottom: 20px;">⏸️ PAUSED</h1>
+    <p style="color: #aaa; font-size: 18px; margin-bottom: 30px;">Press P to resume</p>
+    <div style="color: #00ff88; font-size: 14px;">
+      <p>W A S D – Move | SPACE/SHIFT – Up/Down</p>
+      <p>1 – FIRE | R – Land/Takeoff | E – Interact</p>
+      <p>P – Pause/Unpause</p>
+    </div>
+  </div>
+</div>
+
+<div id="settingsBar">
+  <div class="settings-title">SETTINGS</div>
+  <label>Master <input id="setMaster" type="range" min="0" max="1.5" step="0.01" value="0.34"></label>
+  <label>Music <input id="setMusic" type="range" min="0" max="3" step="0.01" value="1.9"></label>
+  <label>SFX <input id="setSfx" type="range" min="0" max="2" step="0.01" value="0.42"></label>
+  <label>Control <input id="setControl" type="range" min="0.35" max="1.2" step="0.01" value="0.62"></label>
+  <label>VFX <input id="setVfx" type="range" min="0" max="1.5" step="0.01" value="1"></label>
+  <button id="resetProgressBtn" onclick="resetProgress()">Reset Progress</button>
+</div>
+
+<div id="hud">
+  <!-- Always visible HUD button -->
+  <div class="hud-toggle" onclick="toggleHUD()">⊕ HUD</div>
+  
+  <!-- Optional buttons (shop/upgrades) -->
+  <button id="shopButton" onclick="openShop()" style="display: none;">🛒 SHOP</button>
+  <button id="upgradeButton" onclick="openUpgrades()" style="display: none;">⚙️ UPGRADES</button>
+  <button id="mineralButton" onclick="openMineralShop()" style="display: none;">⛏️ MINERALS</button>
+  <button id="inventoryButton" onclick="openInventory()" style="display: none;">🎒 INVENTORY</button>
+  <button id="craftingButton" onclick="openCrafting()" style="display: none;">🛠️ CRAFTING</button>
+  <button id="moduleButton" onclick="openModules()" style="display: none;">🔧 MODULES</button>
+  <button id="techButton" onclick="openTechTree()" style="display: none;">🔬 TECH</button>
+  
+  <!-- The HUD content we can hide -->
+  <div id="hudContent">
+    STARFALL <br><br>
+    <span id="speed">Speed: 0</span><br>
+    <span id="altitude">Altitude: N/A</span><br>
+    <span id="weapon">Weapon: N/A</span><br>
+    <span id="healthLabel">Health:</span><br>
+    <div id="healthBar" style="background: rgba(255,0,0,0.3); width: 150px; height: 12px; border: 1px solid lime; border-radius: 4px; overflow: hidden; margin: 4px 0;">
+      <div id="healthFill" style="background: linear-gradient(90deg, lime, cyan); height: 100%; width: 100%; transition: width 0.1s;"></div>
+    </div>
+    <span id="fuel" style="color: #00ff00;">⛽ Fuel: N/A</span><br>
+    <span id="shield" style="color: #0088ff;">🛡️  Shield: N/A</span><br>
+    <span id="ammo" style="color: #ffaa00;">💥 Ammo: N/A</span><br>
+    <span id="cooldown" style="color: #ff6600;">⏱️ Cooldown: N/A</span><br>
+    <span id="score" style="color: #ffff00; font-weight: bold;">⭐ Score: 0</span><br>
+    <span id="kills" style="color: #ff0000;">💀 Kills: 0</span><br>
+    <span id="difficulty" style="color: #ff9900;">📊 Difficulty: 1</span><br>
+    <span id="landingZone" style="color: #00ff00; display: none;">✓ SAFE LANDING ZONE</span><br>
+    <span id="warning" style="color: #ff0000; font-weight: bold; display: none;">⚠️ COLLISION WARNING!</span><br>
+    <span id="envWarning" style="color: #ff66ff; font-weight: bold; display: none;">⚠️ ENVIRONMENT ALERT</span><br>
+    <br>
+    W A S D – Move | SPACE/SHIFT – Up/Down<br>
+    1 – FIRE | R – Land/Takeoff | E – Interact
+  </div>
+</div>
+
+<!-- Inventory Overlay -->
+<div id="inventoryOverlay" style="display:none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 160; flex-direction: column; justify-content: center; align-items: center;">
+  <div class="shopPanel">
+    <h2>🎒 INVENTORY</h2>
+    <div id="inventoryItems"></div>
+    <button onclick="closeInventory()">CLOSE</button>
+  </div>
+</div>
+
+<!-- Crafting Overlay -->
+<div id="craftingOverlay" style="display:none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 160; flex-direction: column; justify-content: center; align-items: center;">
+  <div class="shopPanel">
+    <h2>🛠️ CRAFTING TABLE</h2>
+    <div id="craftingItems"></div>
+    <button onclick="closeCrafting()">CLOSE</button>
+  </div>
+</div>
+
+
+<div id="minimap" style="position: fixed; bottom: 10px; right: 10px; width: 150px; height: 150px; background: rgba(0,0,20,0.8); border: 2px solid cyan; border-radius: 8px; overflow: hidden;">
+  <canvas id="minimapCanvas" width="150" height="150" style="width: 100%; height: 100%;"></canvas>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+<script src="assets/js/game.module.js"></script>
+<script src="assets/js/module-tech.js"></script>
+</body>
+</html>
