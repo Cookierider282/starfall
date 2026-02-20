@@ -1,0 +1,193 @@
+body { margin: 0; overflow: hidden; background: black; font-family: monospace; color: white; }
+#settingsBar {
+  position: fixed;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(0, 0, 0, 0.72);
+  border: 1px solid rgba(120, 220, 255, 0.55);
+  border-radius: 10px;
+  padding: 6px 10px;
+  z-index: 240;
+  pointer-events: auto;
+}
+#settingsBar .settings-title {
+  color: #8fe4ff;
+  font-weight: bold;
+  font-size: 11px;
+  letter-spacing: 0.8px;
+}
+#settingsBar label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: #d5f4ff;
+  font-size: 11px;
+}
+#settingsBar input[type="range"] {
+  width: 70px;
+}
+#resetProgressBtn {
+  background: rgba(130, 20, 20, 0.82);
+  color: #ffdede;
+  border: 1px solid rgba(255, 120, 120, 0.8);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+#resetProgressBtn:hover {
+  background: rgba(170, 26, 26, 0.9);
+}
+
+@media (max-width: 900px) {
+  #settingsBar {
+    top: 6px;
+    flex-wrap: wrap;
+    justify-content: center;
+    max-width: calc(100vw - 12px);
+    padding: 6px 8px;
+    gap: 6px;
+  }
+  #settingsBar .settings-title {
+    width: 100%;
+    text-align: center;
+    margin-bottom: 2px;
+  }
+  #settingsBar input[type="range"] {
+    width: 62px;
+  }
+}
+
+#hud { 
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  background: rgba(0,0,0,0.7);
+  padding: 12px;
+  border-radius: 8px;
+  font-size: 14px;
+  min-width: 200px;
+  z-index: 20;
+  pointer-events: auto;
+}
+
+#shipBuilder { position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%); background: rgba(0,0,0,0.9); padding: 30px; border-radius: 12px; border: 2px solid cyan; text-align: center; z-index: 100; max-height: 90vh; overflow-y: auto; }
+#builderPreview { width: 300px; height: 300px; border: 1px solid cyan; border-radius: 8px; margin: 20px auto; background: rgba(0,10,30,0.8); }
+.builder-section { margin: 20px 0; }
+.builder-option { padding: 10px; margin: 8px; background: rgba(255,255,255,0.1); border-radius: 6px; cursor: pointer; transition: 0.2s; border: 2px solid transparent; }
+.builder-option:hover { background: rgba(255,255,255,0.3); }
+.builder-option.selected { background: rgba(0,255,255,0.6); border: 2px solid cyan; box-shadow: 0 0 10px cyan; }
+.builder-option .tooltip { font-size: 10px; color: #888; margin-top: 4px; display: block; }
+#startBtn { padding: 12px 24px; font-size: 16px; background: cyan; color: black; border: none; border-radius: 6px; cursor: pointer; margin-top: 20px; font-weight: bold; }
+#startBtn:hover { background: #00ffff; }
+#startBtn:disabled {
+  background: #2f4f57;
+  color: #9cb8bf;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+#startBtn:disabled:hover { background: #2f4f57; }
+#shopButton { position: absolute; top: 10px; right: 10px; padding: 10px 20px; background: #ffaa00; color: black; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; z-index: 50; }
+#shopButton:hover { background: #ffcc00; }
+#shopOverlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); display: none; z-index: 150; flex-direction: column; justify-content: center; align-items: center; }
+.shopPanel {
+  background: rgba(0,0,20,0.95);
+  border: 2px solid #ffaa00;
+  border-radius: 12px;
+  padding: 20px;
+  width: min(92vw, 560px);
+  max-height: 86vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.shopPanel h2 { color: #ffaa00; margin-top: 0; }
+.shopItem { display: flex; justify-content: space-between; align-items: center; background: rgba(20,20,40,0.6); padding: 15px; margin: 10px 0; border-radius: 6px; border-left: 3px solid #ffaa00; }
+.shopItem .itemName { color: #ffff00; font-weight: bold; }
+.shopItem .itemPrice { color: #00ff00; margin-right: 15px; }
+.shopItem button { padding: 8px 15px; background: #ffaa00; color: black; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; }
+.shopItem button:hover { background: #ffcc00; }
+.shopItem button:disabled { background: #666; cursor: not-allowed; }
+#shopClose { padding: 10px 20px; background: #ff0000; color: white; border: none; border-radius: 6px; cursor: pointer; margin-top: 20px; }
+
+/* Scrollable item regions for all shop-like overlays */
+#shopItems,
+#mineralItems,
+#moduleItems,
+#techItems,
+#inventoryItems,
+#craftingItems {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 6px;
+}
+
+/* Keep close buttons visible at the bottom of the panel */
+#shopClose,
+#mineralClose,
+#moduleOverlay .shopPanel button,
+#techOverlay .shopPanel button,
+#inventoryOverlay .shopPanel button,
+#craftingOverlay .shopPanel button {
+  margin-top: 12px;
+  align-self: flex-end;
+}
+
+@media (max-height: 760px) {
+  .shopPanel {
+    max-height: 90vh;
+    padding: 14px;
+  }
+}
+
+/* Mission Panel */
+#missionPanel { position: fixed; top: 10px; right: 170px; background: rgba(0,0,0,0.8); padding: 15px; border-radius: 8px; border: 2px solid #00ff00; max-width: 300px; font-size: 12px; z-index: 40; }
+.mission-header { color: #00ff00; font-weight: bold; margin-bottom: 10px; }
+.mission-item { background: rgba(0,255,0,0.1); padding: 10px; margin: 8px 0; border-left: 3px solid #00ff00; border-radius: 4px; }
+.mission-title { color: #ffff00; font-weight: bold; }
+.mission-progress { color: #00ff00; font-size: 11px; margin-top: 5px; }
+.mission-reward { color: #ffaa00; font-size: 11px; }
+
+/* Achievements/Badges */
+#achievementNotif { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.95); border: 3px solid #ffaa00; border-radius: 12px; padding: 30px; text-align: center; z-index: 300; display: none; }
+.achievement-icon { font-size: 48px; margin-bottom: 15px; }
+.achievement-name { color: #ffaa00; font-size: 20px; font-weight: bold; margin-bottom: 10px; }
+.achievement-desc { color: #aaa; font-size: 14px; }
+
+/* Upgrade Panel */
+#upgradePanel { position: fixed; bottom: 10px; left: 10px; background: rgba(0,0,0,0.8); padding: 15px; border-radius: 8px; border: 2px solid #0088ff; max-width: 250px; font-size: 12px; z-index: 5000; pointer-events: auto; }
+.upgrade-header { color: #0088ff; font-weight: bold; margin-bottom: 10px; }
+.upgrade-item { background: rgba(0,136,255,0.1); padding: 8px; margin: 6px 0; border-radius: 4px; border-left: 2px solid #0088ff; display: flex; justify-content: space-between; }
+.upgrade-name { color: #00ff88; }
+.upgrade-level { color: #0088ff; font-weight: bold; }
+
+/* Screen Shake (animation) */
+@keyframes screenShake {
+  0%, 100% { transform: translate(0, 0); }
+  25% { transform: translate(-5px, -5px); }
+  50% { transform: translate(5px, 5px); }
+  75% { transform: translate(-5px, 5px); }
+}
+
+/* Module & Tech scripts were moved out of the CSS block into a proper <script> section. */
+body.shake { animation: screenShake 0.3s; }
+
+/* HUD Toggle */
+.hud-toggle { position: fixed; top: 10px; right: 10px; background: rgba(0,0,0,0.7); padding: 5px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; border: 1px solid #666; z-index: 45; }
+.hud-toggle:hover { background: rgba(50,50,50,0.8); }
+
+/* Tutorial Overlay */
+#tutorialOverlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); display: none; z-index: 250; flex-direction: column; justify-content: center; align-items: center; }
+.tutorial-box { background: rgba(0,20,40,0.95); border: 3px solid #00ffff; border-radius: 12px; padding: 40px; max-width: 600px; text-align: center; }
+.tutorial-title { color: #00ffff; font-size: 24px; font-weight: bold; margin-bottom: 20px; }
+.tutorial-text { color: #aaa; font-size: 16px; line-height: 1.6; margin-bottom: 20px; }
+.tutorial-controls { background: rgba(0,50,100,0.6); padding: 15px; border-radius: 8px; margin: 15px 0; color: #00ff88; }
+.tutorial-btn { padding: 10px 30px; margin: 10px; background: #00ffff; color: black; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; }
+.tutorial-btn:hover { background: #00aaff; }
+
