@@ -10,6 +10,7 @@ let cameraMode = 'chase'; // 'chase' | 'cockpit'
 let journalOpen = false;
 let sessionEndedByDeath = false;
 const PROGRESS_STORAGE_KEY = 'starfall_progress_v1';
+const TUTORIAL_COMPLETED_KEY = 'starfall_tutorial_completed_v1';
 let _lastAutoSaveAt = 0;
 
 const settingsState = {
@@ -287,6 +288,7 @@ function buildProgressSnapshot() {
       maxShield: ship.maxShield,
       shieldHealth: ship.shieldHealth,
       ammo: ship.ammo,
+      maxAmmo: ship.maxAmmo || 999,
       maxSpeed: ship.maxSpeed,
       acceleration: ship.acceleration,
       fuelConsumption: ship.fuelConsumption,
@@ -332,6 +334,8 @@ function applyLoadedProgress(progress, options = {}) {
     ship.maxShield = Math.max(0, Number(progress.ship.maxShield) || ship.maxShield);
     ship.shieldHealth = clamp(Number(progress.ship.shieldHealth), 0, ship.maxShield);
     ship.ammo = Math.max(0, Number(progress.ship.ammo) || ship.ammo);
+    ship.maxAmmo = Math.max(300, Number(progress.ship.maxAmmo) || ship.maxAmmo || 999);
+    ship.ammo = Math.min(ship.maxAmmo, ship.ammo);
     ship.maxSpeed = Math.max(1, Number(progress.ship.maxSpeed) || ship.maxSpeed);
     ship.acceleration = Math.max(0.03, Number(progress.ship.acceleration) || ship.acceleration);
     ship.fuelConsumption = Math.max(0.01, Number(progress.ship.fuelConsumption) || ship.fuelConsumption);
@@ -399,7 +403,7 @@ const shipConfigs = {
   body: { sleek: { scale: 0.8, speed: 1.3, health: 80 }, heavy: { scale: 1.3, speed: 0.8, health: 150 }, balanced: { scale: 1.0, speed: 1.0, health: 100 } },
   tank: { standard: { accel: 0.25, maxSpeed: 12, fuel: 1.0 }, turbo: { accel: 0.35, maxSpeed: 16, fuel: 0.7 }, economy: { accel: 0.15, maxSpeed: 9, fuel: 1.5 } },
   // Shorter cooldowns and higher damage to make combat snappier
-  engine: { pulse: { fireRate: 180, damage: 14, speed: 20, name: "Pulse Cannon" }, plasma: { fireRate: 320, damage: 34, speed: 15, name: "Plasma Rifle" }, missile: { fireRate: 700, damage: 80, speed: 12, name: "Missile Launcher" } }
+  engine: { pulse: { fireRate: 120, damage: 20, speed: 20, name: "Pulse Cannon" }, plasma: { fireRate: 220, damage: 42, speed: 15, name: "Plasma Rifle" }, missile: { fireRate: 460, damage: 96, speed: 12, name: "Missile Launcher" } }
 };
 
 let shipChoice = { body: null, tank: null, engine: null, shipClass: null };
@@ -1295,18 +1299,22 @@ class EnemyBot {
       boss: { health: 800, speed: 0.8, shootInterval: 90, damage: 25 }
     };
     const cfg = configs[type] || configs.standard;
+    const progression = gameWorld ? Math.min(1.2, (gameWorld.score || 0) / 6000) : 0;
+    const healthScale = 0.82 + progression * 0.4;
+    const damageScale = 0.85 + progression * 0.35;
+    const speedScale = 0.9 + progression * 0.25;
     
-    this.health = cfg.health;
-    this.maxHealth = cfg.health;
+    this.health = Math.max(8, Math.floor(cfg.health * healthScale));
+    this.maxHealth = this.health;
     this.shield = cfg.shield || 0;
     this.position = position.clone();
     this.velocity = new THREE.Vector3();
     this.direction = new THREE.Vector3(0, 0, -1);
     this.shootCooldown = 0;
     this.shootInterval = cfg.shootInterval;
-    this.speed = cfg.speed;
+    this.speed = cfg.speed * speedScale;
     this.patrolRange = 1500;
-    this.damage = cfg.damage;
+    this.damage = Math.max(2, Math.floor(cfg.damage * damageScale));
     this.attachedToPlayer = false;
     this.attachTime = 0;
     this.lastDamageTime = 0;
@@ -1914,6 +1922,12 @@ class Ship {
     this.maxShield = 50;
     this.shieldRegenRate = 0.1;
     this.ammo = 999;
+    this.maxAmmo = 999;
+    this.reloadAmount = 220;
+    this.reloadCooldown = 0;
+    this.reloadCooldownFrames = 22;
+    this.passiveAmmoRegenTick = 0;
+    this.stageFuelBoosts = [];
     this.damageLevel = 0;
     this.previousVelocity = new THREE.Vector3();
     
@@ -2030,9 +2044,16 @@ class Ship {
   }
 
   updatePhysics(keys, planets) {
+    this.updateStageFuelBoosts();
     if (this.landed) return;
 
     if (this.shootCooldown > 0) this.shootCooldown--;
+    if (this.reloadCooldown > 0) this.reloadCooldown--;
+    this.passiveAmmoRegenTick++;
+    if (this.passiveAmmoRegenTick >= 60) {
+      this.passiveAmmoRegenTick = 0;
+      this.addAmmo(4);
+    }
     const accelStep = this.acceleration * this.controlSensitivity;
     const outOfFuel = this.fuel <= 0.05;
 
@@ -2111,7 +2132,9 @@ class Ship {
   addRocketStage() {
     this.extraStages += 1;
     this.maxFuel = Math.floor(this.maxFuel + 45);
-    this.fuel = Math.min(this.maxFuel, this.fuel + 35);
+    const stageFuelBoostAmount = 35;
+    this.fuel = Math.min(this.maxFuel, this.fuel + stageFuelBoostAmount);
+    this.stageFuelBoosts.push({ amount: stageFuelBoostAmount, expiresAt: Date.now() + 180000 });
     this.maxSpeed *= 1.035;
     this.acceleration *= 1.02;
     this.refreshStageVisuals();
@@ -2122,6 +2145,7 @@ class Ship {
     if (this.extraStages <= 0) return false;
 
     this.extraStages -= 1;
+    if (this.stageFuelBoosts.length) this.stageFuelBoosts.shift();
     this.maxFuel = Math.max(100, Math.floor(this.maxFuel - 28));
     this.fuel = Math.min(this.fuel, this.maxFuel);
     this.maxSpeed *= 1.06;
@@ -2439,7 +2463,28 @@ class Ship {
   }
   
   addAmmo(amount) {
-    this.ammo += amount;
+    this.ammo = Math.min(this.maxAmmo, this.ammo + amount);
+  }
+
+  reloadAmmo(force = false) {
+    if (!force && this.reloadCooldown > 0) return false;
+    if (this.ammo >= this.maxAmmo) return false;
+    this.addAmmo(this.reloadAmount);
+    this.reloadCooldown = this.reloadCooldownFrames;
+    return true;
+  }
+
+  updateStageFuelBoosts() {
+    if (!this.stageFuelBoosts.length) return;
+    const now = Date.now();
+    for (let i = this.stageFuelBoosts.length - 1; i >= 0; i--) {
+      const boost = this.stageFuelBoosts[i];
+      if (now >= boost.expiresAt) {
+        this.fuel = Math.max(0, this.fuel - (boost.amount || 0));
+        this.stageFuelBoosts.splice(i, 1);
+        showFloatingText('Rocket stage fuel boost depleted', 1700);
+      }
+    }
   }
 
   detachEnemies(gameWorld) {
@@ -2534,11 +2579,11 @@ class Achievement {
 
 // ===================== UPGRADE SYSTEM =====================
 const UPGRADES = {
-  speed: { name: 'Engine Boost', max: 5, cost: 1000, icon: '⚡', stat: 'maxSpeed', multiplier: 1.1 },
-  health: { name: 'Armor Plating', max: 5, cost: 1500, icon: '🛡️', stat: 'maxHealth', multiplier: 1.15 },
-  weapon: { name: 'Weapon Damage', max: 5, cost: 1750, icon: '💥', stat: 'weaponDamage', multiplier: 1.2 },
-  fuel: { name: 'Fuel Tank', max: 5, cost: 500, icon: '⛽', stat: 'maxFuel', multiplier: 1.15 },
-  regen: { name: 'Shield Regen', max: 3, cost: 750, icon: '✨', stat: 'shieldRegen', multiplier: 1.5 }
+  speed: { name: 'Engine Boost', max: 5, cost: 1000, icon: '\u26A1', stat: 'maxSpeed', multiplier: 1.1 },
+  health: { name: 'Armor Plating', max: 5, cost: 1500, icon: '\u2665', stat: 'maxHealth', multiplier: 1.15 },
+  weapon: { name: 'Weapon Damage', max: 5, cost: 1750, icon: '\u2694', stat: 'weaponDamage', multiplier: 1.2 },
+  fuel: { name: 'Fuel Tank', max: 5, cost: 500, icon: '\u26FD', stat: 'maxFuel', multiplier: 1.15 },
+  regen: { name: 'Shield Regen', max: 3, cost: 750, icon: '\u2728', stat: 'shieldRegen', multiplier: 1.5 }
 };
 
 function getUpgradeCost(cfg, ownedLevel) {
@@ -2650,45 +2695,45 @@ class GameWorld {
     const list = [
       new Achievement(
         'first_landing',
-        '🌍 First Steps',
+        '\uD83C\uDF0D First Steps',
         'Land on your first planet',
-        '🚀',
+        '\uD83D\uDE80',
         (gw, ach) => gw.ship.landed,
         50
       ),
 
       new Achievement(
         'hundred_kills',
-        '💀 Century',
+        '\uD83D\uDC80 Century',
         'Defeat 100 enemies',
-        '🎯',
+        '\uD83C\uDFAF',
         (gw, ach) => (gw.kills - ach.baseline.kills) >= 100,
         200
       ),
 
       new Achievement(
         'no_damage',
-        '✨ Untouchable',
+        '\u2728 Untouchable',
         'Complete a mission with no damage',
-        '🛡️',
+        '\uD83D\uDEE1\uFE0F',
         (gw, ach) => gw.ship.health === gw.ship.maxHealth,
         150
       ),
 
       new Achievement(
         'maxed_shields',
-        '🔋 Full Shield',
+        '\uD83D\uDD0B Full Shield',
         'Reach max shield capacity',
-        '⚡',
+        '\u26A1',
         (gw, ach) => gw.ship.shieldHealth >= gw.ship.maxShield,
         125
       ),
 
       new Achievement(
         'thousand_score',
-        '⭐ Legendary',
+        '\u2B50 Legendary',
         'Earn 1000 score',
-        '👑',
+        '\uD83D\uDC51',
         (gw, ach) => (gw.score - ach.baseline.score) >= 1000,
         250
       ),
@@ -3620,6 +3665,8 @@ class GameWorld {
       this.bullets.push(new Bullet(this.scene, this.ship.position.clone(), dir, this.ship.weaponConfig));
       this.ship.shoot();
       this.ship.ammo--; // Consume ammo
+    } else if (this.ship && this.ship.ammo <= 0) {
+      this.ship.reloadAmmo();
     }
   }
 
@@ -4045,19 +4092,29 @@ class GameWorld {
       }
     });
 
-    // AI raids on player ship.
-    if (now - this._lastAiPlayerRaidAt > 20000 && this.aiCivilizations.length && Math.random() < 0.45) {
+    // AI raids on player ship scale over time/score. Early game stays easier.
+    const elapsedMinutes = Math.max(0, (now - this.gameStartTime) / 60000);
+    const raidTier = Math.min(10, Math.floor(elapsedMinutes / 2.2) + Math.floor(this.score / 1800));
+    const raidIntervalMs = Math.max(9000, 22000 - raidTier * 1200);
+    const raidChance = Math.min(0.9, 0.35 + raidTier * 0.05);
+    if (now - this._lastAiPlayerRaidAt > raidIntervalMs && this.aiCivilizations.length && Math.random() < raidChance) {
       this._lastAiPlayerRaidAt = now;
-      const raidSize = 2 + Math.floor(Math.random() * 3);
+      const raidSize = Math.min(18, 2 + Math.floor(raidTier * 1.2) + Math.floor(Math.random() * (2 + Math.floor(raidTier * 0.6))));
+      let raidPool = ['standard', 'fast'];
+      if (raidTier >= 2) raidPool.push('swarm');
+      if (raidTier >= 4) raidPool.push('sniper');
+      if (raidTier >= 6) raidPool.push('shielded');
+      if (raidTier >= 8) raidPool.push('tank');
       for (let i = 0; i < raidSize; i++) {
         const pos = this.ship.position.clone().add(new THREE.Vector3(
           THREE.MathUtils.randFloat(-240, 240),
           THREE.MathUtils.randFloat(-120, 120),
           THREE.MathUtils.randFloat(-240, 240)
         ));
-        this.enemies.push(new EnemyBot(this.scene, pos, Math.random() < 0.4 ? 'fast' : 'standard'));
+        const raidType = raidPool[Math.floor(Math.random() * raidPool.length)];
+        this.enemies.push(new EnemyBot(this.scene, pos, raidType));
       }
-      showFloatingText(`AI raid incoming (${raidSize})`, 1700);
+      showFloatingText(`AI raid incoming (${raidSize}) - Threat ${raidTier + 1}`, 1700);
     }
   }
 
@@ -4594,12 +4651,12 @@ function updateShopUI() {
     { name: 'Combat Drone', price: 700, type: 'drone_combat', desc: 'Minion that fights enemy aliens near you' },
     { name: 'Harvester Drone', price: 900, type: 'drone_harvester', desc: 'Minion that gathers minerals and salvage' },
     { name: 'Faction War Protocol', price: 1200, type: 'faction_war', desc: 'Enable allied bot patrols vs alien factions' },
-    { name: '🚀 Neon Blue Skin', price: 200, type: 'skin', skinId: 'neon_blue' },
-    { name: '🔥 Crimson Red Skin', price: 200, type: 'skin', skinId: 'crimson_red' },
-    { name: '⚡ Electric Purple Skin', price: 200, type: 'skin', skinId: 'electric_purple' },
-    { name: '🌟 Golden Elite Skin', price: 500, type: 'skin', skinId: 'golden_elite' },
-    { name: '🕶️ Obsidian Stealth', price: 650, type: 'skin', skinId: 'obsidian_stealth' },
-    { name: '❄️ Arctic Ops', price: 650, type: 'skin', skinId: 'arctic_ops' }
+    { name: '\uD83D\uDE80 Neon Blue Skin', price: 200, type: 'skin', skinId: 'neon_blue' },
+    { name: '\uD83D\uDD25 Crimson Red Skin', price: 200, type: 'skin', skinId: 'crimson_red' },
+    { name: '\u26A1 Electric Purple Skin', price: 200, type: 'skin', skinId: 'electric_purple' },
+    { name: '\uD83C\uDF1F Golden Elite Skin', price: 500, type: 'skin', skinId: 'golden_elite' },
+    { name: '\uD83D\uDD76\uFE0F Obsidian Stealth', price: 650, type: 'skin', skinId: 'obsidian_stealth' },
+    { name: '\u2744\uFE0F Arctic Ops', price: 650, type: 'skin', skinId: 'arctic_ops' }
   ];
 
   const items = currentShop ? currentShop.shop : defaultItems;
@@ -4614,7 +4671,7 @@ function updateShopUI() {
           <div class="itemName">${item.name} ${owned ? '(Owned)' : ''}</div>
           <div style="font-size: 11px; color: #aaa;">Cosmetic ship appearance</div>
         </div>
-        <div class="itemPrice">⭐ ${dynamicPrice}</div>
+        <div class="itemPrice">\u2B50 ${dynamicPrice}</div>
         <button onclick="buySkin('${item.skinId}', ${item.price})" 
                 ${score < dynamicPrice || owned ? 'disabled' : ''}>
           ${owned ? 'OWNED' : 'BUY'}
@@ -4631,7 +4688,7 @@ function updateShopUI() {
           <div class="itemName">${item.name} ${already ? '(Established)' : ''}</div>
           <div style="font-size: 11px; color: #aaa;">${item.desc}</div>
         </div>
-        <div class="itemPrice">⭐ ${dynamicPrice}</div>
+        <div class="itemPrice">\u2B50 ${dynamicPrice}</div>
         <button onclick="buyItem('${item.type}', 0, ${item.price})" 
                 ${score < dynamicPrice || already ? 'disabled' : ''}>
           ${already ? 'OWNED' : 'BUY'}
@@ -4712,7 +4769,7 @@ function updateShopUI() {
           <div class="itemName">${item.name}</div>
           <div style="font-size: 11px; color: #aaa;">${item.desc || ''} ${tierInfo}</div>
         </div>
-        <div class="itemPrice">⭐ ${dynamicPrice}</div>
+        <div class="itemPrice">\u2B50 ${dynamicPrice}</div>
         <button onclick="buyItem('${item.type}', 0, ${item.price})" 
                 ${score < dynamicPrice || baseMissing || terraformDone || factionOwned || stationLocked || stationAlready || engineeringMaxed || civMissing || civNotPlayerOwned || civFoundAlready || civGovernmentMaxed || civLegalMaxed || civEconomyMaxed || civWarCooldown || civInvasionUnavailable ? 'disabled' : ''}>
           ${factionOwned || stationAlready || engineeringMaxed || civFoundAlready || civGovernmentMaxed || civLegalMaxed || civEconomyMaxed ? 'OWNED' : 'BUY'}
@@ -4731,7 +4788,7 @@ function updateShopUI() {
           <div class="itemName">${item.name}</div>
           <div style="font-size: 11px; color: #aaa;">Current: ${currentAmount} | +${item.amount}</div>
         </div>
-        <div class="itemPrice">⭐ ${dynamicPrice}</div>
+        <div class="itemPrice">\u2B50 ${dynamicPrice}</div>
         <button onclick="buyItem('${item.type}', ${item.amount}, ${item.price})" 
                 ${score < dynamicPrice ? 'disabled' : ''}>
           BUY
@@ -4794,13 +4851,13 @@ window.updateInventoryUI = function() {
       <div class="itemPrice">LIVE</div>
     </div>
     <div style="padding:12px 4px; line-height:1.7;">
-      <div>⛏️ Minerals: <strong>${r.minerals || 0}</strong></div>
-      <div>🗜 Salvage: <strong>${r.salvage || 0}</strong></div>
-      <div>💥 Ammo: <strong>${gameWorld.ship.ammo}</strong></div>
-      <div>⛽ Fuel: <strong>${Math.floor(gameWorld.ship.fuel)}</strong> / ${Math.floor(gameWorld.ship.maxFuel)}</div>
-      <div>🛡️ Shield: <strong>${Math.floor(gameWorld.ship.shieldHealth)}</strong> / ${Math.floor(gameWorld.ship.maxShield)}</div>
-      <div>❤️ Health: <strong>${Math.floor(gameWorld.ship.health)}</strong> / ${Math.floor(gameWorld.ship.maxHealth)}</div>
-      <div>🚀 Extra Stages: <strong>${gameWorld.ship.extraStages || 0}</strong></div>
+      <div>\u26CF\uFE0F Minerals: <strong>${r.minerals || 0}</strong></div>
+      <div>\u2699 Salvage: <strong>${r.salvage || 0}</strong></div>
+      <div>\uD83D\uDCA5 Ammo: <strong>${gameWorld.ship.ammo}</strong></div>
+      <div>\u26FD Fuel: <strong>${Math.floor(gameWorld.ship.fuel)}</strong> / ${Math.floor(gameWorld.ship.maxFuel)}</div>
+      <div>\uD83D\uDEE1\uFE0F Shield: <strong>${Math.floor(gameWorld.ship.shieldHealth)}</strong> / ${Math.floor(gameWorld.ship.maxShield)}</div>
+      <div>\u2764\uFE0F Health: <strong>${Math.floor(gameWorld.ship.health)}</strong> / ${Math.floor(gameWorld.ship.maxHealth)}</div>
+      <div>\uD83D\uDE80 Extra Stages: <strong>${gameWorld.ship.extraStages || 0}</strong></div>
     </div>
   `;
 };
@@ -4813,7 +4870,7 @@ window.updateCraftingUI = function() {
   const r = gameWorld.resources || { minerals: 0, salvage: 0 };
 
   el.innerHTML = `
-    <div style="margin-bottom:10px;">Resources: <strong>⛏️ ${r.minerals || 0}</strong> minerals | <strong>🗜 ${r.salvage || 0}</strong> salvage</div>
+    <div style="margin-bottom:10px;">Resources: <strong>\u26CF\uFE0F ${r.minerals || 0}</strong> minerals | <strong>\u2699 ${r.salvage || 0}</strong> salvage</div>
     ${recipes.map((rec) => {
       const can = (r.minerals || 0) >= rec.minerals && (r.salvage || 0) >= rec.salvage;
       return `
@@ -4863,17 +4920,17 @@ function updateMineralUI() {
     <div style="margin-bottom:12px;">You have <strong>${minerals}</strong> minerals</div>
     <div class="shopItem">
       <div><div class="itemName">Sell 10 Minerals</div><div style="font-size:11px;color:#aaa">Get 50 score</div></div>
-      <div class="itemPrice">⭐ 50</div>
+      <div class="itemPrice">\u2B50 50</div>
       <button onclick="sellMinerals(10)" ${minerals < 10 ? 'disabled' : ''}>SELL</button>
     </div>
     <div class="shopItem">
       <div><div class="itemName">Sell 50 Minerals</div><div style="font-size:11px;color:#aaa">Get 260 score</div></div>
-      <div class="itemPrice">⭐ 260</div>
+      <div class="itemPrice">\u2B50 260</div>
       <button onclick="sellMinerals(50)" ${minerals < 50 ? 'disabled' : ''}>SELL</button>
     </div>
     <div class="shopItem">
       <div><div class="itemName">Sell All</div><div style="font-size:11px;color:#aaa">Convert all minerals to score</div></div>
-      <div class="itemPrice">⭐ —</div>
+      <div class="itemPrice">\u2B50 varies</div>
       <button onclick="sellMinerals('all')" ${minerals <= 0 ? 'disabled' : ''}>SELL</button>
     </div>
   `;
@@ -5311,7 +5368,7 @@ function updateMissionsUI() {
     <div class="mission-item">
       <div class="mission-title">${m.description}</div>
       <div class="mission-progress">Progress: ${m.current}/${m.target} (${m.getProgress()}%)</div>
-      <div class="mission-reward">${m.completed ? '✓ COMPLETE +' + m.reward + ' pts' : ''}</div>
+      <div class="mission-reward">${m.completed ? ' COMPLETE +' + m.reward + ' pts' : ''}</div>
     </div>
   `).join('');
 }
@@ -5414,97 +5471,137 @@ window.toggleHUD = function() {
 
 // ===================== TUTORIAL SYSTEM =====================
 let tutorialStep = 0;
+let tutorialOpenedInGame = false;
 
 const tutorials = [
   {
+    npc: 'Commander Astra',
     title: 'Welcome to Starfall',
-    text: 'You are a space pilot on a dangerous mission through enemy territory. Your goal is to survive, complete missions, and earn upgrade points.',
-    controls: 'Use W/A/S/D to move your ship in 3D space'
+    text: 'Pilot, I am Commander Astra. I will guide you through combat, survival, and progression systems.',
+    controls: 'Follow each step and use these tips in real missions.'
   },
   {
+    npc: 'Commander Astra',
     title: 'Movement Controls',
-    text: 'Master your ship\'s movement. W/S control forward/backward thrust, A/D control left/right movement. SPACE and SHIFT control altitude - go up and down.',
+    text: 'Master your ship first. W/S control forward/backward thrust, A/D control lateral movement, and SPACE/SHIFT move vertically.',
     controls: 'W/S: Forward/Back | A/D: Left/Right | SPACE: Up | SHIFT: Down'
   },
   {
+    npc: 'Commander Astra',
     title: 'Combat Basics',
-    text: 'Enemies will spawn as you progress. Use your weapons to destroy them and earn points.',
-    controls: 'Press 1 to FIRE your weapon'
+    text: 'Keep pressure on enemy swarms. Your weapons now fire faster, and quick reload keeps your ammo high.',
+    controls: 'Press 1 to FIRE | Press Q to RELOAD quickly'
   },
   {
+    npc: 'Commander Astra',
     title: 'Landing & Resources',
     text: 'Planets provide safe landing zones for refueling and repairs. Land by approaching slowly and pressing R.',
     controls: 'Press R to LAND / TAKEOFF'
   },
   {
+    npc: 'Commander Astra',
     title: 'Missions & Objectives',
     text: 'Complete missions to earn upgrade points. New missions appear endlessly.',
     controls: 'Check MISSIONS panel (top-right)'
   },
   {
+    npc: 'Commander Astra',
     title: 'Upgrades & Shop',
     text: 'Upgrade your ship stats and buy supplies in the shop.',
-    controls: '⚙️ UPGRADES | 🛒 SHOP'
+    controls: 'UPGRADES | SHOP'
   },
   {
+    npc: 'Commander Astra',
     title: 'HUD & Minimap',
     text: 'HUD shows vital info. Minimap shows nearby planets and enemies.',
-    controls: '⊕ HUD toggle'
+    controls: 'Use the HUD toggle any time'
   },
   {
+    npc: 'Commander Astra',
     title: 'Advanced Combat',
     text: 'Enemies may attach and drain health. Shake them off by moving fast.',
-    controls: 'Move erratically'
+    controls: 'Move erratically when enemies latch on'
   },
   {
+    npc: 'Commander Astra',
     title: 'Survival Tips',
-    text: 'Monitor health, shields, fuel, and ammo.',
-    controls: 'P: Pause | R: Interact'
+    text: 'Rocket stage fuel boosts are temporary. Use boosted fuel aggressively before it expires.',
+    controls: 'P: Pause | E: Interact | Z: Separate Stage'
   },
   {
+    npc: 'Commander Astra',
     title: 'Begin Mission',
-    text: 'You are ready. Good luck, pilot.',
-    controls: 'Press NEXT then START MISSION'
+    text: 'You are mission-ready. AI raids start small but scale in size and danger as you survive longer.',
+    controls: 'Finish this tutorial and launch.'
   }
 ];
 
+function hasCompletedTutorialOnce() {
+  try { return localStorage.getItem(TUTORIAL_COMPLETED_KEY) === '1'; } catch (e) { return false; }
+}
+
+function updateTutorialButtons(step) {
+  const skipBtn = document.getElementById('tutorialSkipBtn');
+  const nextBtn = document.querySelector('#tutorialOverlay .tutorial-btn');
+  if (skipBtn) skipBtn.style.display = hasCompletedTutorialOnce() ? 'inline-block' : 'none';
+  if (nextBtn) nextBtn.textContent = step >= tutorials.length - 1 ? 'Finish Mission Briefing' : 'Next ->';
+}
+
 function showTutorialStep(step) {
   const t = tutorials[step];
+  if (!t) return;
+  const npcEl = document.getElementById('tutorialNpcName');
+  const progressEl = document.getElementById('tutorialProgress');
+  if (npcEl) npcEl.textContent = t.npc || 'Commander Astra';
+  if (progressEl) progressEl.textContent = `Step ${step + 1}/${tutorials.length}`;
   document.getElementById('tutorialTitle').textContent = t.title;
   document.getElementById('tutorialText').textContent = t.text;
   document.getElementById('tutorialControls').textContent = t.controls;
+  updateTutorialButtons(step);
 }
 
 window.nextTutorial = function() {
   tutorialStep++;
   if (tutorialStep >= tutorials.length) {
-    closeTutorial();
+    closeTutorial(true);
   } else {
     showTutorialStep(tutorialStep);
   }
 };
 
 window.skipTutorial = function() {
-  closeTutorial();
+  if (!hasCompletedTutorialOnce()) {
+    showFloatingText('Finish tutorial once to unlock Skip', 1700);
+    return;
+  }
+  closeTutorial(false);
 };
 
-function closeTutorial() {
+function closeTutorial(markCompleted = false) {
+  if (markCompleted) {
+    try { localStorage.setItem(TUTORIAL_COMPLETED_KEY, '1'); } catch (e) {}
+  }
   const overlay = document.getElementById('tutorialOverlay');
   overlay.style.display = 'none';
   overlay.style.pointerEvents = 'none';
+  if (tutorialOpenedInGame && gameStarted && !gameOver) paused = false;
+  tutorialOpenedInGame = false;
 }
 
-// Always show tutorial on page load
-window.addEventListener('load', () => {
-  initSettingsBar();
-  updateStartButtonState();
+function startTutorialSequence() {
   tutorialStep = 0;
-
+  tutorialOpenedInGame = !!gameStarted;
   const overlay = document.getElementById('tutorialOverlay');
   overlay.style.display = 'flex';
   overlay.style.pointerEvents = 'auto';
+  if (tutorialOpenedInGame && !gameOver) paused = true;
+  showTutorialStep(tutorialStep);
+}
 
-  showTutorialStep(0);
+window.addEventListener('load', () => {
+  initSettingsBar();
+  updateStartButtonState();
+  closeTutorial(false);
 });
 
 
@@ -5538,9 +5635,6 @@ window.startGame = function() {
   upgradePanelEl.style.pointerEvents = 'none';
   updateUpgradesUI();
   updateMissionsUI();
-  
-  // Hide tutorial after starting
-  document.getElementById('tutorialOverlay').style.display = 'none';
   
   gameStarted = true;
   gameOver = false;
@@ -5608,6 +5702,7 @@ window.startGame = function() {
   gameWorld.gameStartTime = Date.now();
   gameWorld.megaShip = null;
   gameWorld.megaShipSpawned = false;
+  startTutorialSequence();
 }
 
 function handleInteractAction() {
@@ -5634,6 +5729,14 @@ document.addEventListener("keydown", e => {
   
   if (gameStarted && e.code === "Digit1") {
     gameWorld.firePlayerWeapon();
+  }
+  if (gameStarted && e.code === "KeyQ" && !e.repeat && gameWorld && gameWorld.ship) {
+    if (gameWorld.ship.reloadAmmo()) {
+      showFloatingText(`Reloaded: ${gameWorld.ship.ammo}/${gameWorld.ship.maxAmmo}`, 900);
+      playSound('pickup');
+    } else if (gameWorld.ship.reloadCooldown > 0) {
+      showFloatingText('Reload cooling down', 700);
+    }
   }
   if (gameStarted && e.code === "KeyZ" && !e.repeat) {
     if (gameWorld && gameWorld.ship && gameWorld.ship.separateStage()) {
@@ -5793,6 +5896,59 @@ function setupTouchControls() {
   interactBtn.style.touchAction = 'none';
   ui.appendChild(interactBtn);
 
+  const upBtn = document.createElement('button');
+  upBtn.id = 'touchUpBtn';
+  upBtn.textContent = 'UP';
+  upBtn.style.position = 'absolute';
+  upBtn.style.left = '168px';
+  upBtn.style.bottom = '116px';
+  upBtn.style.width = '64px';
+  upBtn.style.height = '48px';
+  upBtn.style.borderRadius = '10px';
+  upBtn.style.border = '2px solid rgba(160,255,190,0.9)';
+  upBtn.style.background = 'rgba(12,110,38,0.5)';
+  upBtn.style.color = '#fff';
+  upBtn.style.fontWeight = 'bold';
+  upBtn.style.pointerEvents = 'auto';
+  upBtn.style.touchAction = 'none';
+  ui.appendChild(upBtn);
+
+  const downBtn = document.createElement('button');
+  downBtn.id = 'touchDownBtn';
+  downBtn.textContent = 'DOWN';
+  downBtn.style.position = 'absolute';
+  downBtn.style.left = '168px';
+  downBtn.style.bottom = '56px';
+  downBtn.style.width = '64px';
+  downBtn.style.height = '48px';
+  downBtn.style.borderRadius = '10px';
+  downBtn.style.border = '2px solid rgba(255,160,160,0.9)';
+  downBtn.style.background = 'rgba(110,20,20,0.55)';
+  downBtn.style.color = '#fff';
+  downBtn.style.fontWeight = 'bold';
+  downBtn.style.fontSize = '11px';
+  downBtn.style.pointerEvents = 'auto';
+  downBtn.style.touchAction = 'none';
+  ui.appendChild(downBtn);
+
+  const reloadBtn = document.createElement('button');
+  reloadBtn.id = 'touchReloadBtn';
+  reloadBtn.textContent = 'RELOAD';
+  reloadBtn.style.position = 'absolute';
+  reloadBtn.style.right = '26px';
+  reloadBtn.style.bottom = '130px';
+  reloadBtn.style.width = '96px';
+  reloadBtn.style.height = '48px';
+  reloadBtn.style.borderRadius = '10px';
+  reloadBtn.style.border = '2px solid rgba(255,230,120,0.9)';
+  reloadBtn.style.background = 'rgba(120,100,20,0.52)';
+  reloadBtn.style.color = '#fff';
+  reloadBtn.style.fontWeight = 'bold';
+  reloadBtn.style.fontSize = '12px';
+  reloadBtn.style.pointerEvents = 'auto';
+  reloadBtn.style.touchAction = 'none';
+  ui.appendChild(reloadBtn);
+
   let joystickPointerId = null;
   let joyCenterX = 0;
   let joyCenterY = 0;
@@ -5803,6 +5959,8 @@ function setupTouchControls() {
     keys["KeyA"] = false;
     keys["KeyS"] = false;
     keys["KeyD"] = false;
+    keys["Space"] = false;
+    keys["ShiftLeft"] = false;
     mouseX = 0;
     mouseY = 0;
     joystickKnob.style.left = '40px';
@@ -5879,6 +6037,32 @@ function setupTouchControls() {
   interactBtn.addEventListener('pointerdown', (e) => {
     e.preventDefault();
     handleInteractAction();
+  });
+  const setVerticalKey = (code, on) => {
+    keys[code] = on;
+  };
+  const bindHoldButton = (btn, code) => {
+    btn.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      btn.setPointerCapture(e.pointerId);
+      setVerticalKey(code, true);
+    });
+    const release = (e) => {
+      e.preventDefault();
+      setVerticalKey(code, false);
+    };
+    btn.addEventListener('pointerup', release);
+    btn.addEventListener('pointercancel', release);
+  };
+  bindHoldButton(upBtn, 'Space');
+  bindHoldButton(downBtn, 'ShiftLeft');
+  reloadBtn.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    if (!gameStarted || gameOver || !gameWorld || !gameWorld.ship) return;
+    if (gameWorld.ship.reloadAmmo()) {
+      showFloatingText(`Reloaded: ${gameWorld.ship.ammo}/${gameWorld.ship.maxAmmo}`, 900);
+      playSound('pickup');
+    }
   });
 
   window.addEventListener('blur', () => {
@@ -6379,12 +6563,12 @@ function updateHUD() {
   document.getElementById('altitude').textContent = `Altitude: ${stats.altitude} m`;
   document.getElementById('weapon').textContent = `Weapon: ${stats.weaponName}`;
   document.getElementById('healthLabel').textContent = `Health: ${Math.max(0, stats.health)}/${stats.maxHealth}`;
-  document.getElementById('fuel').textContent = `⛽ Fuel: ${stats.fuel}/${stats.maxFuel}`;
-  document.getElementById('shield').textContent = `🛡️  Shield: ${stats.shield}/${gameWorld.ship.maxShield}`;
-  document.getElementById('ammo').textContent = `💥 Ammo: ${stats.ammo}`;
-  document.getElementById('cooldown').textContent = `⏱️ Cooldown: ${stats.cooldown}ms`;
-  document.getElementById('score').textContent = `⭐ Score: ${stats.score}`;
-  document.getElementById('kills').textContent = `💀 Kills: ${stats.kills}`;
+  document.getElementById('fuel').textContent = `\u26FD Fuel: ${stats.fuel}/${stats.maxFuel}`;
+  document.getElementById('shield').textContent = `\uD83D\uDEE1\uFE0F Shield: ${stats.shield}/${gameWorld.ship.maxShield}`;
+  document.getElementById('ammo').textContent = `\uD83D\uDCA5 Ammo: ${stats.ammo}`;
+  document.getElementById('cooldown').textContent = `\u23F1\uFE0F Cooldown: ${stats.cooldown}ms`;
+  document.getElementById('score').textContent = `\u2B50 Score: ${stats.score}`;
+  document.getElementById('kills').textContent = `\uD83D\uDC80 Kills: ${stats.kills}`;
   if (!document.getElementById('stageLabel')) {
     const stageEl = document.createElement('div');
     stageEl.id = 'stageLabel';
@@ -6392,7 +6576,7 @@ function updateHUD() {
     stageEl.style.marginTop = '2px';
     document.getElementById('hudContent').appendChild(stageEl);
   }
-  document.getElementById('stageLabel').textContent = `🚀 Stages: ${gameWorld.ship.extraStages || 0} (Z to separate)`;
+  document.getElementById('stageLabel').textContent = `\uD83D\uDE80 Stages: ${gameWorld.ship.extraStages || 0} (Z to separate)`;
   // Resources
   const minerals = gameWorld.resources ? gameWorld.resources.minerals : 0;
   const salvage = gameWorld.resources ? gameWorld.resources.salvage : 0;
@@ -6407,11 +6591,11 @@ function updateHUD() {
     el.style.marginTop = '4px';
     document.getElementById('hudContent').appendChild(el);
   }
-  document.getElementById('resourceLabel').textContent = `⛏️ Minerals: ${minerals} | 🗜 Salvage: ${salvage} | Drones C/H: ${droneCombat}/${droneHarvest}${factionTag}`;
+  document.getElementById('resourceLabel').textContent = `\u26CF\uFE0F Minerals: ${minerals} | \u2699 Salvage: ${salvage} | Drones C/H: ${droneCombat}/${droneHarvest}${factionTag}`;
   
   // Calculate difficulty level based on score
   const difficultyLevel = 1 + Math.floor(gameWorld.score / 500);
-  document.getElementById('difficulty').textContent = `📊 Wave: ${difficultyLevel} (${gameWorld.enemies.length}/${gameWorld.maxEnemies})`;
+  document.getElementById('difficulty').textContent = `\uD83D\uDCCA Wave: ${difficultyLevel} (${gameWorld.enemies.length}/${gameWorld.maxEnemies})`;
   
   // Check for collision warning
   let closestPlanet = null;
@@ -6436,7 +6620,7 @@ function updateHUD() {
   const envEl = document.getElementById('envWarning');
   if (gameWorld.inNebula) {
     envEl.style.display = 'inline';
-    envEl.textContent = '🌫️ Nebula: enemies hidden, sensors reduced';
+    envEl.textContent = '\uD83C\uDF2B\uFE0F Nebula: enemies hidden, sensors reduced';
   } else {
     // check black hole proximity
     let nearBH = false;
@@ -6448,7 +6632,7 @@ function updateHUD() {
     }
     if (nearBH) {
       envEl.style.display = 'inline';
-      envEl.textContent = '⚫ BLACK HOLE: strong gravity, steer clear';
+      envEl.textContent = '\u26AB BLACK HOLE: strong gravity, steer clear';
     } else {
       envEl.style.display = 'none';
     }
