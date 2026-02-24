@@ -5546,12 +5546,17 @@ function updateTutorialButtons(step) {
   const nextBtn = document.getElementById('tutorialNextBtn');
   if (skipBtn) skipBtn.style.display = hasCompletedTutorialOnce() ? 'inline-block' : 'none';
   if (prevBtn) {
+    prevBtn.textContent = 'Back';
+    prevBtn.onclick = window.prevTutorial;
     const atStart = step <= 0;
     prevBtn.disabled = atStart;
     prevBtn.style.opacity = atStart ? '0.5' : '1';
     prevBtn.style.cursor = atStart ? 'default' : 'pointer';
   }
-  if (nextBtn) nextBtn.textContent = step >= tutorials.length - 1 ? 'Finish Mission Briefing' : 'Next ->';
+  if (nextBtn) {
+    nextBtn.onclick = window.nextTutorial;
+    nextBtn.textContent = step >= tutorials.length - 1 ? 'Finish Mission Briefing' : 'Next ->';
+  }
 }
 
 function syncTutorialProgressLabel(currentStep = tutorialStep) {
