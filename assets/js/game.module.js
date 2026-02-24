@@ -5542,8 +5542,15 @@ function hasCompletedTutorialOnce() {
 
 function updateTutorialButtons(step) {
   const skipBtn = document.getElementById('tutorialSkipBtn');
-  const nextBtn = document.querySelector('#tutorialOverlay .tutorial-btn');
+  const prevBtn = document.getElementById('tutorialPrevBtn');
+  const nextBtn = document.getElementById('tutorialNextBtn');
   if (skipBtn) skipBtn.style.display = hasCompletedTutorialOnce() ? 'inline-block' : 'none';
+  if (prevBtn) {
+    const atStart = step <= 0;
+    prevBtn.disabled = atStart;
+    prevBtn.style.opacity = atStart ? '0.5' : '1';
+    prevBtn.style.cursor = atStart ? 'default' : 'pointer';
+  }
   if (nextBtn) nextBtn.textContent = step >= tutorials.length - 1 ? 'Finish Mission Briefing' : 'Next ->';
 }
 
@@ -5574,6 +5581,12 @@ window.nextTutorial = function() {
   } else {
     showTutorialStep(tutorialStep);
   }
+};
+
+window.prevTutorial = function() {
+  tutorialStep--;
+  if (tutorialStep < 0) tutorialStep = 0;
+  showTutorialStep(tutorialStep);
 };
 
 window.skipTutorial = function() {
