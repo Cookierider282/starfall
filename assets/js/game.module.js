@@ -5547,19 +5547,20 @@ function updateTutorialButtons(step) {
   if (nextBtn) nextBtn.textContent = step >= tutorials.length - 1 ? 'Finish Mission Briefing' : 'Next ->';
 }
 
-function syncTutorialProgressLabel() {
+function syncTutorialProgressLabel(currentStep = tutorialStep) {
   const progressEl = document.getElementById('tutorialProgress');
   if (!progressEl) return;
-  const current = Math.min(tutorials.length, Math.max(1, tutorialStep + 1));
+  const current = Math.min(tutorials.length, Math.max(1, currentStep + 1));
   progressEl.textContent = `Step ${current}/${tutorials.length}`;
 }
 
 function showTutorialStep(step) {
   const t = tutorials[step];
   if (!t) return;
+  tutorialStep = step;
   const npcEl = document.getElementById('tutorialNpcName');
   if (npcEl) npcEl.textContent = t.npc || 'Commander Astra';
-  syncTutorialProgressLabel();
+  syncTutorialProgressLabel(step);
   document.getElementById('tutorialTitle').textContent = t.title;
   document.getElementById('tutorialText').textContent = t.text;
   document.getElementById('tutorialControls').textContent = t.controls;
