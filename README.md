@@ -1,3 +1,9 @@
+## ▶️ Play Now
+
+🔗 **Live Demo:** https://cookierider282.github.io/starfall/
+
+---
+
 # 🌌 Starfall — A Living Galaxy Sandbox
 
 **Starfall** is a fully procedural **3D space sandbox RPG** where players explore an endless galaxy, design and engineer ships, build civilizations, terraform planets, and reshape entire star systems.
@@ -85,13 +91,6 @@ You don't follow a story.
 - Custom procedural generation & simulation systems
 
 ---
-
-## ▶️ Play Now
-
-🔗 **Live Demo:** https://cookierider282.github.io/starfall/
-
----
-
 
 ## 🧪 Development Status
 
