@@ -2636,6 +2636,7 @@ class GameWorld {
     this._factionWaveCount = 0;
     this.returnBaseTarget = null;
     this._lastSatelliteTick = Date.now();
+    this._passiveScoreCarry = 0;
     this.gameStartTime = Date.now();
     this.megaShip = null;
     this.megaShipSpawned = false;
@@ -4118,6 +4119,20 @@ class GameWorld {
     }
   }
 
+  getPassiveScorePerSecond() {
+    const tiers = this.satelliteTiers || { t1: 0, t2: 0, t3: 0 };
+    const satelliteSps = (tiers.t1 || 0) * 2 + (tiers.t2 || 0) * 6 + (tiers.t3 || 0) * 14;
+    let dysonSps = 0;
+    if (Array.isArray(this.planets)) {
+      for (let i = 0; i < this.planets.length; i++) {
+        const p = this.planets[i];
+        const swarms = p && p.engineering ? (p.engineering.dysonSwarms || 0) : 0;
+        dysonSps += swarms * 20;
+      }
+    }
+    return satelliteSps + dysonSps;
+  }
+
   update(keys) {
       this.ship.updatePhysics(keys, this.planets);
 
@@ -4305,7 +4320,19 @@ class GameWorld {
           this.upgradePoints += 25;
       }
 
-      // Passive per-second score gain removed.
+      // Passive income from satellite tiers and Dyson swarms.
+      const nowPassive = Date.now();
+      const elapsedMs = Math.max(0, nowPassive - (this._lastSatelliteTick || nowPassive));
+      this._lastSatelliteTick = nowPassive;
+      const passiveSps = this.getPassiveScorePerSecond();
+      if (passiveSps > 0 && elapsedMs > 0) {
+        this._passiveScoreCarry += (elapsedMs / 1000) * passiveSps;
+        const wholePoints = Math.floor(this._passiveScoreCarry);
+        if (wholePoints > 0) {
+          this.score += wholePoints;
+          this._passiveScoreCarry -= wholePoints;
+        }
+      }
 
       // --- Generate new missions if all are completed ---
       if (this.missions.every(m => m.completed)) {
@@ -4712,10 +4739,12 @@ function updateShopUI() {
       const factionOwned = item.type === 'faction_war' && gameWorld && gameWorld.factionWarMode;
       const stationTier = planet ? (planet.baseLevel || 0) : 0;
       const stationLocked =
+        (item.type === 'base_t1' && stationTier >= 1) ||
         (item.type === 'base_t2' && stationTier < 1) ||
         (item.type === 'base_t3' && stationTier < 2) ||
         (item.type === 'base_t4' && stationTier < 3);
       const stationAlready =
+        (item.type === 'base_t1' && stationTier >= 1) ||
         (item.type === 'base_t2' && stationTier >= 2) ||
         (item.type === 'base_t3' && stationTier >= 3) ||
         (item.type === 'base_t4' && stationTier >= 4);
@@ -4742,6 +4771,7 @@ function updateShopUI() {
         if (item.type === 'satellite_t3') return `Owned: ${gameWorld.satelliteTiers.t3 || 0} | Needs T2`;
         if (item.type === 'drone_combat') return `Owned: ${(gameWorld.droneCounts && gameWorld.droneCounts.combat) || 0}`;
         if (item.type === 'drone_harvester') return `Owned: ${(gameWorld.droneCounts && gameWorld.droneCounts.harvester) || 0}`;
+        if (item.type === 'base_t1') return `Current station tier: ${stationTier} | Tier I upgrade`;
         if (item.type === 'base_t2') return `Current station tier: ${stationTier} | Requires Tier I`;
         if (item.type === 'base_t3') return `Current station tier: ${stationTier} | Requires Tier II`;
         if (item.type === 'base_t4') return `Current station tier: ${stationTier} | Requires Tier III`;
@@ -4960,6 +4990,7 @@ function ensurePlanetBaseShopUpgrades(planet) {
     { name: 'Base Refuel Service', type: 'base_refuel', price: 300, desc: 'Instant full fuel refill at your station' },
     { name: 'Base Crafting', type: 'base_craft', price: 450, desc: 'Convert salvage into modules and parts' },
     { name: 'Base Trading Contract', type: 'base_trade', price: 600, desc: 'Trade route payout from this planet base' },
+    { name: 'Station Tier I', type: 'base_t1', price: 900, desc: 'Expand station capacity and production output' },
     { name: 'Station Tier II', type: 'base_t2', price: 1400, desc: 'Upgrade station size/output. Requires Tier I base' },
     { name: 'Station Tier III', type: 'base_t3', price: 2600, desc: 'Upgrade station systems. Requires Tier II' },
     { name: 'Station Tier IV', type: 'base_t4', price: 4200, desc: 'Top-tier station with max support bonuses' },
@@ -5012,6 +5043,10 @@ window.buyItem = function(type, amount, cost) {
   }
   if (type === 'faction_war' && gameWorld.factionWarMode) {
     showFloatingText('Faction War mode already active', 1700);
+    return;
+  }
+  if (type === 'base_t1' && (!planet || !planet.hasBase || (planet.baseLevel || 0) >= 1)) {
+    showFloatingText('Requires base at Tier 0 to upgrade to Tier I', 1900);
     return;
   }
   if (type === 'base_t2' && (!planet || !planet.hasBase || (planet.baseLevel || 0) < 1 || (planet.baseLevel || 0) >= 2)) {
@@ -5135,18 +5170,18 @@ window.buyItem = function(type, amount, cost) {
     } else {
       if (!planet.hasBase) {
         planet.hasBase = true;
-        planet.baseLevel = 1;
-        if (typeof planet.buildBase === 'function') planet.buildBase(1);
+        planet.baseLevel = 0;
+        if (typeof planet.buildBase === 'function') planet.buildBase(0);
         ensurePlanetBaseShopUpgrades(planet);
         gameWorld.upgradePoints += 200;
-        showFloatingText('Base established! Station online. +200 upgrade pts', 2600);
+        showFloatingText('Base established! Station online. Purchase Tier I to expand. +200 upgrade pts', 2600);
       } else {
         gameWorld.score += effectiveCost;
         showFloatingText('Base already established here.', 1600);
       }
     }
-  } else if (type === 'base_t2' || type === 'base_t3' || type === 'base_t4') {
-    const targetTier = type === 'base_t2' ? 2 : type === 'base_t3' ? 3 : 4;
+  } else if (type === 'base_t1' || type === 'base_t2' || type === 'base_t3' || type === 'base_t4') {
+    const targetTier = type === 'base_t1' ? 1 : type === 'base_t2' ? 2 : type === 'base_t3' ? 3 : 4;
     planet.baseLevel = Math.max(planet.baseLevel || 1, targetTier);
     if (typeof planet.buildBase === 'function') planet.buildBase(planet.baseLevel);
     gameWorld.upgradePoints += 100 + targetTier * 45;
