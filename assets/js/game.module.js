@@ -268,6 +268,7 @@ function buildProgressSnapshot() {
     satellites: gameWorld.satellites || 0,
     factionWarMode: !!gameWorld.factionWarMode,
     droneCounts: gameWorld.droneCounts || { combat: 0, harvester: 0 },
+    crew: sanitizeCrewState(gameWorld.crew),
     purchaseCounts: gameWorld.purchaseCounts || {},
     artifactsCollected: gameWorld.artifactsCollected || 0,
     aiCivilizations: Array.isArray(gameWorld.aiCivilizations) ? gameWorld.aiCivilizations : [],
@@ -322,6 +323,7 @@ function applyLoadedProgress(progress, options = {}) {
   gameWorld.satellites = Math.max(0, Number(progress.satellites) || 0);
   gameWorld.factionWarMode = !!progress.factionWarMode;
   gameWorld.droneCounts = progress.droneCounts && typeof progress.droneCounts === 'object' ? progress.droneCounts : { combat: 0, harvester: 0 };
+  gameWorld.crew = sanitizeCrewState(progress.crew);
   gameWorld.purchaseCounts = progress.purchaseCounts && typeof progress.purchaseCounts === 'object' ? progress.purchaseCounts : {};
   gameWorld.artifactsCollected = Math.max(0, Number(progress.artifactsCollected) || 0);
   gameWorld.aiCivilizations = Array.isArray(progress.aiCivilizations) ? progress.aiCivilizations : [];
@@ -447,6 +449,33 @@ const shipClasses = {
   balanced: { healthMul: 1.0, speedMul: 1.0, desc: 'Balanced stats' },
   drone: { healthMul: 0.95, speedMul: 1.0, desc: 'Drone carrier: deploys drones (future)' }
 };
+
+const CREW_SPECIALISTS = {
+  pilot: { name: 'Pilot Specialist', hireCost: 1600, wagePerMin: 18, desc: 'Improves acceleration and top speed' },
+  engineer: { name: 'Engineer Specialist', hireCost: 1900, wagePerMin: 24, desc: 'Boosts shield regen and hull repairs' },
+  gunner: { name: 'Gunner Specialist', hireCost: 1750, wagePerMin: 21, desc: 'Increases weapon damage and fire rate' }
+};
+
+function createDefaultCrewState() {
+  return {
+    pilot: { hired: false, morale: 68, totalPaid: 0 },
+    engineer: { hired: false, morale: 68, totalPaid: 0 },
+    gunner: { hired: false, morale: 68, totalPaid: 0 }
+  };
+}
+
+function sanitizeCrewState(crewInput) {
+  const crew = createDefaultCrewState();
+  if (!crewInput || typeof crewInput !== 'object') return crew;
+  Object.keys(crew).forEach((role) => {
+    const incoming = crewInput[role];
+    if (!incoming || typeof incoming !== 'object') return;
+    crew[role].hired = !!incoming.hired;
+    crew[role].morale = clamp(Number(incoming.morale), 0, 100);
+    crew[role].totalPaid = Math.max(0, Number(incoming.totalPaid) || 0);
+  });
+  return crew;
+}
 
 const PROFESSIONAL_SKINS = {
   neon_blue: {
@@ -2046,6 +2075,11 @@ class Ship {
   updatePhysics(keys, planets) {
     this.updateStageFuelBoosts();
     if (this.landed) return;
+    const crewBonuses = this.crewBonuses || {};
+    const crewAccelMul = crewBonuses.accelMul || 1;
+    const crewMaxSpeedMul = crewBonuses.maxSpeedMul || 1;
+    const crewShieldMul = crewBonuses.shieldRegenMul || 1;
+    const crewFuelUseMul = crewBonuses.fuelUseMul || 1;
 
     if (this.shootCooldown > 0) this.shootCooldown--;
     if (this.reloadCooldown > 0) this.reloadCooldown--;
@@ -2054,7 +2088,7 @@ class Ship {
       this.passiveAmmoRegenTick = 0;
       this.addAmmo(4);
     }
-    const accelStep = this.acceleration * this.controlSensitivity;
+    const accelStep = this.acceleration * this.controlSensitivity * crewAccelMul;
     const outOfFuel = this.fuel <= 0.05;
 
     let isMoving = false;
@@ -2069,7 +2103,7 @@ class Ship {
     
     // Consume fuel when moving
     if (!outOfFuel && isMoving) {
-      this.fuel = Math.max(0, this.fuel - 0.1 * (this.velocity.length() / this.maxSpeed));
+      this.fuel = Math.max(0, this.fuel - (0.1 * crewFuelUseMul) * (this.velocity.length() / Math.max(1, this.maxSpeed * crewMaxSpeedMul)));
       if (this.fuel <= 0) {
         this.velocity.multiplyScalar(0.9); // Slow down if out of fuel
       }
@@ -2093,9 +2127,9 @@ class Ship {
     }
 
     // Regenerate shield
-    this.shieldHealth = Math.min(this.maxShield, this.shieldHealth + this.shieldRegenRate);
+    this.shieldHealth = Math.min(this.maxShield, this.shieldHealth + this.shieldRegenRate * crewShieldMul);
 
-    this.velocity.clampLength(0, this.maxSpeed);
+    this.velocity.clampLength(0, this.maxSpeed * crewMaxSpeedMul);
     this.velocity.multiplyScalar(outOfFuel ? 1.0 : this.friction);
 
     this.applyGravity(planets);
@@ -2437,7 +2471,8 @@ class Ship {
   }
 
   shoot() {
-    this.shootCooldown = this.weaponConfig.fireRate;
+    const crewFireRateMul = this.crewBonuses && this.crewBonuses.fireRateMul ? this.crewBonuses.fireRateMul : 1;
+    this.shootCooldown = Math.max(20, Math.floor(this.weaponConfig.fireRate * crewFireRateMul));
   }
 
   takeDamage(amount) {
@@ -2637,6 +2672,10 @@ class GameWorld {
     this.returnBaseTarget = null;
     this._lastSatelliteTick = Date.now();
     this._passiveScoreCarry = 0;
+    this.crew = createDefaultCrewState();
+    this._lastCrewTickAt = Date.now();
+    this._crewWageCarry = 0;
+    this._lastCrewWarningAt = 0;
     this.gameStartTime = Date.now();
     this.megaShip = null;
     this.megaShipSpawned = false;
@@ -3663,7 +3702,12 @@ class GameWorld {
   firePlayerWeapon() {
     if (this.ship.canShoot()) {
       const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(this.ship.mesh.quaternion);
-      this.bullets.push(new Bullet(this.scene, this.ship.position.clone(), dir, this.ship.weaponConfig));
+      const crewDamageMul = this.ship.crewBonuses && this.ship.crewBonuses.damageMul ? this.ship.crewBonuses.damageMul : 1;
+      const shotCfg = {
+        speed: this.ship.weaponConfig.speed,
+        damage: Math.max(1, Math.floor(this.ship.weaponConfig.damage * crewDamageMul))
+      };
+      this.bullets.push(new Bullet(this.scene, this.ship.position.clone(), dir, shotCfg));
       this.ship.shoot();
       this.ship.ammo--; // Consume ammo
     } else if (this.ship && this.ship.ammo <= 0) {
@@ -4133,7 +4177,117 @@ class GameWorld {
     return satelliteSps + dysonSps;
   }
 
+  getCrewWagePerMinute() {
+    let wage = 0;
+    const crew = this.crew || createDefaultCrewState();
+    Object.keys(CREW_SPECIALISTS).forEach((role) => {
+      if (crew[role] && crew[role].hired) wage += CREW_SPECIALISTS[role].wagePerMin;
+    });
+    return wage;
+  }
+
+  getCrewBonuses() {
+    const crew = this.crew || createDefaultCrewState();
+    const bonuses = {
+      accelMul: 1,
+      maxSpeedMul: 1,
+      shieldRegenMul: 1,
+      hullRegenPerSec: 0,
+      fuelUseMul: 1,
+      damageMul: 1,
+      fireRateMul: 1
+    };
+    const roles = Object.keys(CREW_SPECIALISTS);
+    const hired = roles.filter((r) => crew[r] && crew[r].hired);
+    if (!hired.length) return bonuses;
+
+    const morale = (role) => clamp(Number(crew[role].morale), 0, 100) / 100;
+
+    if (crew.pilot && crew.pilot.hired) {
+      const m = morale('pilot');
+      bonuses.accelMul += 0.18 * m;
+      bonuses.maxSpeedMul += 0.12 * m;
+      bonuses.fuelUseMul -= 0.1 * m;
+    }
+    if (crew.engineer && crew.engineer.hired) {
+      const m = morale('engineer');
+      bonuses.shieldRegenMul += 0.22 * m;
+      bonuses.hullRegenPerSec += 1.6 * m;
+    }
+    if (crew.gunner && crew.gunner.hired) {
+      const m = morale('gunner');
+      bonuses.damageMul += 0.24 * m;
+      bonuses.fireRateMul -= 0.18 * m;
+    }
+
+    if (hired.length === roles.length) {
+      const avgMorale = hired.reduce((sum, role) => sum + morale(role), 0) / hired.length;
+      bonuses.accelMul += 0.06 * avgMorale;
+      bonuses.damageMul += 0.06 * avgMorale;
+      bonuses.fireRateMul -= 0.05 * avgMorale;
+    }
+
+    bonuses.fireRateMul = THREE.MathUtils.clamp(bonuses.fireRateMul, 0.65, 1.25);
+    bonuses.fuelUseMul = THREE.MathUtils.clamp(bonuses.fuelUseMul, 0.75, 1.35);
+    return bonuses;
+  }
+
+  updateCrewSystems() {
+    const now = Date.now();
+    const elapsedMs = Math.max(0, now - (this._lastCrewTickAt || now));
+    this._lastCrewTickAt = now;
+    if (elapsedMs <= 0 || !this.ship) return;
+
+    const crew = this.crew || createDefaultCrewState();
+    const hiredRoles = Object.keys(CREW_SPECIALISTS).filter((role) => crew[role] && crew[role].hired);
+    if (!hiredRoles.length) return;
+
+    const elapsedSec = elapsedMs / 1000;
+    const wagePerMinute = this.getCrewWagePerMinute();
+    this._crewWageCarry = (this._crewWageCarry || 0) + (wagePerMinute * (elapsedMs / 60000));
+    const wageDue = Math.floor(this._crewWageCarry);
+    if (wageDue > 0) {
+      this._crewWageCarry -= wageDue;
+      const available = Math.max(0, Math.floor(this.score));
+      const paid = Math.min(available, wageDue);
+      if (paid > 0) {
+        this.score -= paid;
+        hiredRoles.forEach((role) => {
+          crew[role].totalPaid = Math.max(0, (crew[role].totalPaid || 0) + (paid / hiredRoles.length));
+        });
+      }
+      const unpaid = wageDue - paid;
+      if (unpaid > 0) {
+        const moraleHit = Math.min(16, 2 + unpaid * 0.04);
+        hiredRoles.forEach((role) => {
+          crew[role].morale = clamp((crew[role].morale || 0) - moraleHit, 0, 100);
+        });
+        if (!this._lastCrewWarningAt || now - this._lastCrewWarningAt > 7000) {
+          showFloatingText('Crew wages unpaid. Morale dropping.', 2000);
+          this._lastCrewWarningAt = now;
+        }
+      } else {
+        hiredRoles.forEach((role) => {
+          crew[role].morale = clamp((crew[role].morale || 0) + 0.35, 0, 100);
+        });
+      }
+    }
+
+    const lowHealth = this.ship.health < this.ship.maxHealth * 0.35;
+    const moraleDrift = lowHealth ? -0.05 * elapsedSec : 0.015 * elapsedSec;
+    hiredRoles.forEach((role) => {
+      crew[role].morale = clamp((crew[role].morale || 0) + moraleDrift, 0, 100);
+    });
+
+    const bonuses = this.getCrewBonuses();
+    if (bonuses.hullRegenPerSec > 0) {
+      this.ship.health = Math.min(this.ship.maxHealth, this.ship.health + bonuses.hullRegenPerSec * elapsedSec);
+    }
+  }
+
   update(keys) {
+      this.updateCrewSystems();
+      this.ship.crewBonuses = this.getCrewBonuses();
       this.ship.updatePhysics(keys, this.planets);
 
       // Environmental effects: Nebula visibility and Black Hole gravity
@@ -4677,6 +4831,9 @@ function updateShopUI() {
     { name: 'Health Repair', price: 150, type: 'health', amount: 100 },
     { name: 'Combat Drone', price: 700, type: 'drone_combat', desc: 'Minion that fights enemy aliens near you' },
     { name: 'Harvester Drone', price: 900, type: 'drone_harvester', desc: 'Minion that gathers minerals and salvage' },
+    { name: CREW_SPECIALISTS.pilot.name, price: CREW_SPECIALISTS.pilot.hireCost, type: 'crew_pilot', desc: `${CREW_SPECIALISTS.pilot.desc} | Wage: ${CREW_SPECIALISTS.pilot.wagePerMin}/min` },
+    { name: CREW_SPECIALISTS.engineer.name, price: CREW_SPECIALISTS.engineer.hireCost, type: 'crew_engineer', desc: `${CREW_SPECIALISTS.engineer.desc} | Wage: ${CREW_SPECIALISTS.engineer.wagePerMin}/min` },
+    { name: CREW_SPECIALISTS.gunner.name, price: CREW_SPECIALISTS.gunner.hireCost, type: 'crew_gunner', desc: `${CREW_SPECIALISTS.gunner.desc} | Wage: ${CREW_SPECIALISTS.gunner.wagePerMin}/min` },
     { name: 'Faction War Protocol', price: 1200, type: 'faction_war', desc: 'Enable allied bot patrols vs alien factions' },
     { name: '\uD83D\uDE80 Neon Blue Skin', price: 200, type: 'skin', skinId: 'neon_blue' },
     { name: '\uD83D\uDD25 Crimson Red Skin', price: 200, type: 'skin', skinId: 'crimson_red' },
@@ -4726,6 +4883,7 @@ function updateShopUI() {
       item.type === 'stage' ||
       (item.type && item.type.startsWith('satellite')) ||
       (item.type && item.type.startsWith('drone_')) ||
+      (item.type && item.type.startsWith('crew_')) ||
       (item.type && item.type.startsWith('base_')) ||
       (item.type && item.type.startsWith('eng_')) ||
       (item.type && item.type.startsWith('civ_')) ||
@@ -4758,6 +4916,9 @@ function updateShopUI() {
       const civWarCooldown = item.type === 'civ_war' && civ.lastWarAt && (Date.now() - civ.lastWarAt < 28000);
       const civInvasionUnavailable = item.type === 'civ_invasion' && (!gameWorld || !planet || !civ.founded || !gameWorld.findRivalCivilizedPlanet('player', planet));
       const engineering = planet && planet.engineering ? planet.engineering : {};
+      const crewRole = item.type === 'crew_pilot' ? 'pilot' : item.type === 'crew_engineer' ? 'engineer' : item.type === 'crew_gunner' ? 'gunner' : null;
+      const crewEntry = crewRole && gameWorld && gameWorld.crew ? gameWorld.crew[crewRole] : null;
+      const crewOwned = !!(crewEntry && crewEntry.hired);
       const engineeringMaxed =
         ((item.type === 'eng_move_moon') && (engineering.movedMoons || 0) >= 3) ||
         ((item.type === 'eng_artificial_rings') && (engineering.artificialRings || 0) >= 2) ||
@@ -4771,6 +4932,9 @@ function updateShopUI() {
         if (item.type === 'satellite_t3') return `Owned: ${gameWorld.satelliteTiers.t3 || 0} | Needs T2`;
         if (item.type === 'drone_combat') return `Owned: ${(gameWorld.droneCounts && gameWorld.droneCounts.combat) || 0}`;
         if (item.type === 'drone_harvester') return `Owned: ${(gameWorld.droneCounts && gameWorld.droneCounts.harvester) || 0}`;
+        if (item.type === 'crew_pilot') return crewOwned ? `Hired | Morale: ${Math.floor(crewEntry.morale || 0)}%` : 'Not hired';
+        if (item.type === 'crew_engineer') return crewOwned ? `Hired | Morale: ${Math.floor(crewEntry.morale || 0)}%` : 'Not hired';
+        if (item.type === 'crew_gunner') return crewOwned ? `Hired | Morale: ${Math.floor(crewEntry.morale || 0)}%` : 'Not hired';
         if (item.type === 'base_t1') return `Current station tier: ${stationTier} | Tier I upgrade`;
         if (item.type === 'base_t2') return `Current station tier: ${stationTier} | Requires Tier I`;
         if (item.type === 'base_t3') return `Current station tier: ${stationTier} | Requires Tier II`;
@@ -4801,8 +4965,8 @@ function updateShopUI() {
         </div>
         <div class="itemPrice">\u2B50 ${dynamicPrice}</div>
         <button onclick="buyItem('${item.type}', 0, ${item.price})" 
-                ${score < dynamicPrice || baseMissing || terraformDone || factionOwned || stationLocked || stationAlready || engineeringMaxed || civMissing || civNotPlayerOwned || civFoundAlready || civGovernmentMaxed || civLegalMaxed || civEconomyMaxed || civWarCooldown || civInvasionUnavailable ? 'disabled' : ''}>
-          ${factionOwned || stationAlready || engineeringMaxed || civFoundAlready || civGovernmentMaxed || civLegalMaxed || civEconomyMaxed ? 'OWNED' : 'BUY'}
+                ${score < dynamicPrice || crewOwned || baseMissing || terraformDone || factionOwned || stationLocked || stationAlready || engineeringMaxed || civMissing || civNotPlayerOwned || civFoundAlready || civGovernmentMaxed || civLegalMaxed || civEconomyMaxed || civWarCooldown || civInvasionUnavailable ? 'disabled' : ''}>
+          ${crewOwned || factionOwned || stationAlready || engineeringMaxed || civFoundAlready || civGovernmentMaxed || civLegalMaxed || civEconomyMaxed ? 'OWNED' : 'BUY'}
         </button>
       </div>
     `;
@@ -5027,6 +5191,7 @@ window.buyItem = function(type, amount, cost) {
   if (!gameWorld) return;
   if (!gameWorld.satelliteTiers) gameWorld.satelliteTiers = { t1: 0, t2: 0, t3: 0 };
   if (!gameWorld.droneCounts) gameWorld.droneCounts = { combat: 0, harvester: 0 };
+  if (!gameWorld.crew) gameWorld.crew = createDefaultCrewState();
   ensureMarketState();
   const planet = window._activePlanetRef || null;
   const engineering = planet && planet.engineering ? planet.engineering : null;
@@ -5043,6 +5208,18 @@ window.buyItem = function(type, amount, cost) {
   }
   if (type === 'faction_war' && gameWorld.factionWarMode) {
     showFloatingText('Faction War mode already active', 1700);
+    return;
+  }
+  if (type === 'crew_pilot' && gameWorld.crew.pilot && gameWorld.crew.pilot.hired) {
+    showFloatingText('Pilot specialist already hired', 1700);
+    return;
+  }
+  if (type === 'crew_engineer' && gameWorld.crew.engineer && gameWorld.crew.engineer.hired) {
+    showFloatingText('Engineer specialist already hired', 1700);
+    return;
+  }
+  if (type === 'crew_gunner' && gameWorld.crew.gunner && gameWorld.crew.gunner.hired) {
+    showFloatingText('Gunner specialist already hired', 1700);
     return;
   }
   if (type === 'base_t1' && (!planet || !planet.hasBase || (planet.baseLevel || 0) >= 1)) {
@@ -5159,6 +5336,18 @@ window.buyItem = function(type, amount, cost) {
     gameWorld.droneCounts.harvester = (gameWorld.droneCounts.harvester || 0) + 1;
     if (typeof gameWorld.spawnHelperBot === 'function') gameWorld.spawnHelperBot('harvester', 'player');
     showFloatingText('Harvester drone deployed', 1800);
+  } else if (type === 'crew_pilot') {
+    gameWorld.crew.pilot.hired = true;
+    gameWorld.crew.pilot.morale = Math.max(gameWorld.crew.pilot.morale || 0, 74);
+    showFloatingText('Pilot specialist hired', 1900);
+  } else if (type === 'crew_engineer') {
+    gameWorld.crew.engineer.hired = true;
+    gameWorld.crew.engineer.morale = Math.max(gameWorld.crew.engineer.morale || 0, 74);
+    showFloatingText('Engineer specialist hired', 1900);
+  } else if (type === 'crew_gunner') {
+    gameWorld.crew.gunner.hired = true;
+    gameWorld.crew.gunner.morale = Math.max(gameWorld.crew.gunner.morale || 0, 74);
+    showFloatingText('Gunner specialist hired', 1900);
   } else if (type === 'faction_war') {
     gameWorld.factionWarMode = true;
     gameWorld._lastFactionBotSpawn = Date.now() - 9000;
@@ -6010,6 +6199,25 @@ function setupTouchControls() {
   reloadBtn.style.touchAction = 'none';
   ui.appendChild(reloadBtn);
 
+  const takeoffBtn = document.createElement('button');
+  takeoffBtn.id = 'touchTakeoffBtn';
+  takeoffBtn.textContent = 'TAKEOFF';
+  takeoffBtn.style.position = 'absolute';
+  takeoffBtn.style.right = '130px';
+  takeoffBtn.style.bottom = '130px';
+  takeoffBtn.style.width = '110px';
+  takeoffBtn.style.height = '48px';
+  takeoffBtn.style.borderRadius = '10px';
+  takeoffBtn.style.border = '2px solid rgba(120,255,180,0.9)';
+  takeoffBtn.style.background = 'rgba(25,120,70,0.55)';
+  takeoffBtn.style.color = '#fff';
+  takeoffBtn.style.fontWeight = 'bold';
+  takeoffBtn.style.fontSize = '12px';
+  takeoffBtn.style.pointerEvents = 'auto';
+  takeoffBtn.style.touchAction = 'none';
+  takeoffBtn.style.display = 'none';
+  ui.appendChild(takeoffBtn);
+
   let joystickPointerId = null;
   let joyCenterX = 0;
   let joyCenterY = 0;
@@ -6124,6 +6332,12 @@ function setupTouchControls() {
       showFloatingText(`Reloaded: ${gameWorld.ship.ammo}/${gameWorld.ship.maxAmmo}`, 900);
       playSound('pickup');
     }
+  });
+  takeoffBtn.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    if (!gameStarted || gameOver || !gameWorld || !gameWorld.ship || !gameWorld.ship.landed) return;
+    keys["KeyR"] = true;
+    setTimeout(() => { keys["KeyR"] = false; }, 120);
   });
 
   window.addEventListener('blur', () => {
@@ -6643,6 +6857,10 @@ function updateHUD() {
   const salvage = gameWorld.resources ? gameWorld.resources.salvage : 0;
   const droneCombat = gameWorld.droneCounts ? (gameWorld.droneCounts.combat || 0) : 0;
   const droneHarvest = gameWorld.droneCounts ? (gameWorld.droneCounts.harvester || 0) : 0;
+  const crew = gameWorld.crew || createDefaultCrewState();
+  const hiredCrew = Object.keys(CREW_SPECIALISTS).filter((role) => crew[role] && crew[role].hired);
+  const crewMorale = hiredCrew.length ? Math.floor(hiredCrew.reduce((sum, role) => sum + (crew[role].morale || 0), 0) / hiredCrew.length) : 0;
+  const crewWage = gameWorld.getCrewWagePerMinute ? gameWorld.getCrewWagePerMinute() : 0;
   const factionTag = gameWorld.factionWarMode ? ' | Faction War: ON' : '';
   // show below kills
   if (!document.getElementById('resourceLabel')) {
@@ -6652,7 +6870,7 @@ function updateHUD() {
     el.style.marginTop = '4px';
     document.getElementById('hudContent').appendChild(el);
   }
-  document.getElementById('resourceLabel').textContent = `\u26CF\uFE0F Minerals: ${minerals} | \u2699 Salvage: ${salvage} | Drones C/H: ${droneCombat}/${droneHarvest}${factionTag}`;
+  document.getElementById('resourceLabel').textContent = `\u26CF\uFE0F Minerals: ${minerals} | \u2699 Salvage: ${salvage} | Drones C/H: ${droneCombat}/${droneHarvest} | Crew: ${hiredCrew.length}/3 (${crewMorale}% morale, ${crewWage}/min)${factionTag}`;
   
   // Calculate difficulty level based on score
   const difficultyLevel = 1 + Math.floor(gameWorld.score / 500);
@@ -6720,6 +6938,11 @@ function updateHUD() {
   
   if (gameWorld.ship.landed) {
     document.getElementById('speed').textContent += ' [LANDED]';
+  }
+  const takeoffBtn = document.getElementById('touchTakeoffBtn');
+  if (takeoffBtn) {
+    const showTakeoff = !!(gameWorld && gameWorld.ship && gameWorld.ship.landed);
+    takeoffBtn.style.display = showTakeoff ? 'block' : 'none';
   }
 
   const cockpitOverlay = document.getElementById('cockpitOverlay');
