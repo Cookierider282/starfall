@@ -2,12 +2,38 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Starfall</title>
 <!-- Multiple sizes for different devices -->
   <link rel="icon" type="image/png" href="favicon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="assets/css/styles.css">
 </head>
 <body>
+<div id="titleScreen">
+  <div class="title-stars title-stars--near"></div>
+  <div class="title-stars title-stars--mid"></div>
+  <div class="title-stars title-stars--far"></div>
+  <div class="title-orbit"></div>
+  <div class="title-content">
+    <div class="title-badge">Arcade Space Survival</div>
+    <h1 class="title-logo">STARFALL</h1>
+    <p class="title-subtitle">Build your ship, pick your skin, and drop into a cleaner, faster mission flow.</p>
+    <div class="title-actions">
+      <button id="titlePlayBtn" onclick="openShipBuilder()">PLAY</button>
+    </div>
+    <div class="title-skins">
+      <div class="title-panel-header">
+        <h2>Choose Ship Skin</h2>
+        <span id="selectedSkinLabel">Selected: Neon Blue</span>
+      </div>
+      <div id="skinSelection" class="skin-selection-grid"></div>
+    </div>
+  </div>
+</div>
+
 <div id="shipBuilder">
 <h2>&#9889; SHIP BUILDER &#9889;</h2>
 <div id="builderPreview"></div>
@@ -113,14 +139,14 @@
   </div>
 </div>
 
-<div id="gameOverOverlay" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); display: none; z-index: 200; flex-direction: column; justify-content: center; align-items: center;">
-<h1 style="color: #ff0000; font-size: 60px; margin: 20px; text-shadow: 0 0 20px #ff0000;">&#9760;&#65039; MISSION FAILED &#9760;&#65039;</h1>
-<div id="gameOverStats" style="color: #ffff00; font-size: 20px; text-align: center; margin: 30px; background: rgba(0,0,20,0.8); padding: 30px; border-radius: 10px; border: 2px solid #ff0000;">
+<div id="gameOverOverlay" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; display: none; z-index: 200; flex-direction: column; justify-content: center; align-items: center;">
+<h1 class="game-over-title">&#9760;&#65039; MISSION FAILED &#9760;&#65039;</h1>
+<div id="gameOverStats">
 <p id="finalScore">Final Score: 0</p>
 <p id="finalKills">Final Kills: 0</p>
 <p id="deathMessage">Your ship has been destroyed!</p>
 </div>
-<button onclick="restartGame()" style="padding: 15px 40px; font-size: 18px; background: #00ff00; color: black; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; margin: 10px; transition: 0.2s;" onmouseover="this.style.background='#00aaff'" onmouseout="this.style.background='#00ff00'">RESTART MISSION</button>
+<button id="restartMissionBtn" onclick="restartGame()">RESTART MISSION</button>
 </div>
 
 <!-- Mission Panel -->
@@ -163,11 +189,11 @@
 </div>
 
 <!-- Pause Overlay -->
-<div id="pauseOverlay" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); display: none; z-index: 250; flex-direction: column; justify-content: center; align-items: center;">
-  <div style="background: rgba(0,20,40,0.95); border: 3px solid #00ffff; border-radius: 12px; padding: 40px; text-align: center;">
-    <h1 style="color: #00ffff; font-size: 48px; margin-bottom: 20px;">&#9208;&#65039; PAUSED</h1>
-    <p style="color: #aaa; font-size: 18px; margin-bottom: 30px;">Press P to resume</p>
-    <div style="color: #00ff88; font-size: 14px;">
+<div id="pauseOverlay" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; display: none; z-index: 250; flex-direction: column; justify-content: center; align-items: center;">
+  <div class="pause-card">
+    <h1 class="pause-title">&#9208;&#65039; PAUSED</h1>
+    <p class="pause-subtitle">Press P to resume</p>
+    <div class="pause-help">
       <p>W A S D - Move | SPACE/SHIFT - Up/Down</p>
       <p>1 - FIRE | Q - Reload | R - Land/Takeoff | E - Interact</p>
       <p>P - Pause/Unpause</p>
@@ -197,6 +223,7 @@
   <button id="craftingButton" onclick="openCrafting()" style="display: none;">&#128736;&#65039; CRAFTING</button>
   <button id="moduleButton" onclick="openModules()" style="display: none;">&#128295; MODULES</button>
   <button id="techButton" onclick="openTechTree()" style="display: none;">&#128300; TECH</button>
+  <button id="enginePartsButton" onclick="toggleEnginePartsPanel()" style="display: none;">&#128295; ENGINE PARTS</button>
   
   <!-- The HUD content we can hide -->
   <div id="hudContent">
@@ -224,6 +251,42 @@
   </div>
 </div>
 
+<div id="enginePartsPanel" class="engine-parts-panel" aria-hidden="true">
+  <div class="engine-parts-header">
+    <div>
+      <div class="engine-parts-eyebrow">Ship Systems</div>
+      <h2>Engine Parts</h2>
+    </div>
+    <button id="enginePartsClose" onclick="toggleEnginePartsPanel(false)">Close</button>
+  </div>
+  <div class="engine-parts-summary">
+    <div class="engine-stage-badge">Stage <span id="enginePartsStage">1</span></div>
+    <div class="engine-stage-copy">Unlocked by total score: <span id="enginePartsUnlockText">0+</span></div>
+    <div class="engine-score-copy">Current score: <span id="enginePartsCurrentScore">0</span></div>
+    <div class="engine-score-copy">Total score: <span id="enginePartsTotalScore">0</span></div>
+  </div>
+  <div class="engine-slots-grid" id="engineSlotGrid">
+    <div class="engine-slot" data-slot="engine">
+      <div class="engine-slot-label">Engine</div>
+      <div class="engine-slot-value" id="engineSlot-engine">Empty</div>
+    </div>
+    <div class="engine-slot" data-slot="booster">
+      <div class="engine-slot-label">Booster</div>
+      <div class="engine-slot-value" id="engineSlot-booster">Empty</div>
+    </div>
+    <div class="engine-slot" data-slot="fuel">
+      <div class="engine-slot-label">Fuel</div>
+      <div class="engine-slot-value" id="engineSlot-fuel">Empty</div>
+    </div>
+    <div class="engine-slot" data-slot="stabilizer">
+      <div class="engine-slot-label">Stabilizer</div>
+      <div class="engine-slot-value" id="engineSlot-stabilizer">Empty</div>
+    </div>
+  </div>
+  <div class="engine-live-stats" id="engineLiveStats"></div>
+  <div class="engine-parts-list" id="enginePartsList"></div>
+</div>
+
 <!-- Inventory Overlay -->
 <div id="inventoryOverlay" style="display:none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 160; flex-direction: column; justify-content: center; align-items: center;">
   <div class="shopPanel">
@@ -243,7 +306,7 @@
 </div>
 
 
-<div id="minimap" style="position: fixed; bottom: 10px; right: 10px; width: 150px; height: 150px; background: rgba(0,0,20,0.8); border: 2px solid cyan; border-radius: 8px; overflow: hidden;">
+<div id="minimap">
   <canvas id="minimapCanvas" width="150" height="150" style="width: 100%; height: 100%;"></canvas>
 </div>
 

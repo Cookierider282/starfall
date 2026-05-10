@@ -255,6 +255,9 @@ function restoreWorldState(worldState) {
 function buildProgressSnapshot() {
   if (!gameWorld || !gameWorld.ship) return null;
   const ship = gameWorld.ship;
+  const engineEffect = typeof ship.getTotalEnginePartEffect === 'function'
+    ? ship.getTotalEnginePartEffect()
+    : { accelDelta: 0, maxSpeedDelta: 0, maxFuelDelta: 0, fuelConsumptionMul: 1 };
   const landedPlanetId = ship.landedPlanet && ship.landedPlanet.id ? ship.landedPlanet.id : null;
   return {
     score: gameWorld.score || 0,
@@ -269,6 +272,8 @@ function buildProgressSnapshot() {
     factionWarMode: !!gameWorld.factionWarMode,
     droneCounts: gameWorld.droneCounts || { combat: 0, harvester: 0 },
     crew: sanitizeCrewState(gameWorld.crew),
+    totalScoreEarned: Math.max(0, Number(gameWorld.totalScoreEarned) || 0),
+    enginePartsState: sanitizeEnginePartsState(gameWorld.enginePartsState),
     purchaseCounts: gameWorld.purchaseCounts || {},
     artifactsCollected: gameWorld.artifactsCollected || 0,
     aiCivilizations: Array.isArray(gameWorld.aiCivilizations) ? gameWorld.aiCivilizations : [],
@@ -282,7 +287,7 @@ function buildProgressSnapshot() {
     resumeAllowed: !!(gameStarted && !gameOver && !sessionEndedByDeath && ship.health > 0),
     lastSessionEndedByDeath: !!sessionEndedByDeath,
     ship: {
-      maxFuel: ship.maxFuel,
+      maxFuel: Math.max(50, ship.maxFuel - (engineEffect.maxFuelDelta || 0)),
       fuel: ship.fuel,
       maxHealth: ship.maxHealth,
       health: ship.health,
@@ -290,9 +295,9 @@ function buildProgressSnapshot() {
       shieldHealth: ship.shieldHealth,
       ammo: ship.ammo,
       maxAmmo: ship.maxAmmo || 999,
-      maxSpeed: ship.maxSpeed,
-      acceleration: ship.acceleration,
-      fuelConsumption: ship.fuelConsumption,
+      maxSpeed: Math.max(1, ship.maxSpeed - (engineEffect.maxSpeedDelta || 0)),
+      acceleration: Math.max(0.03, ship.acceleration - (engineEffect.accelDelta || 0)),
+      fuelConsumption: Math.max(0.01, ship.fuelConsumption / (engineEffect.fuelConsumptionMul || 1)),
       extraStages: ship.extraStages || 0
     },
     savedAt: Date.now()
@@ -324,6 +329,9 @@ function applyLoadedProgress(progress, options = {}) {
   gameWorld.factionWarMode = !!progress.factionWarMode;
   gameWorld.droneCounts = progress.droneCounts && typeof progress.droneCounts === 'object' ? progress.droneCounts : { combat: 0, harvester: 0 };
   gameWorld.crew = sanitizeCrewState(progress.crew);
+  gameWorld.totalScoreEarned = Math.max(0, Number(progress.totalScoreEarned) || gameWorld.score || 0);
+  gameWorld._scoreTrackerLast = gameWorld.score;
+  gameWorld.enginePartsState = sanitizeEnginePartsState(progress.enginePartsState);
   gameWorld.purchaseCounts = progress.purchaseCounts && typeof progress.purchaseCounts === 'object' ? progress.purchaseCounts : {};
   gameWorld.artifactsCollected = Math.max(0, Number(progress.artifactsCollected) || 0);
   gameWorld.aiCivilizations = Array.isArray(progress.aiCivilizations) ? progress.aiCivilizations : [];
@@ -387,6 +395,7 @@ function applyLoadedProgress(progress, options = {}) {
   if (window.updateUpgradesUI) updateUpgradesUI();
   if (window.updateModuleUI) updateModuleUI();
   if (window.updateTechUI) updateTechUI();
+  if (window.initializeEnginePartsForCurrentShip) initializeEnginePartsForCurrentShip();
 }
 
 window.resetProgress = function() {
@@ -394,9 +403,12 @@ window.resetProgress = function() {
   if (!ok) return;
   try {
     localStorage.removeItem(PROGRESS_STORAGE_KEY);
-    localStorage.removeItem('currentSkin');
+    localStorage.removeItem(SKIN_STORAGE_KEY);
     Object.keys(PROFESSIONAL_SKINS || {}).forEach((id) => localStorage.removeItem(`skin_${id}`));
   } catch (e) {}
+  ensureDefaultSkinOwnership();
+  renderSkinSelection();
+  updateSelectedSkinLabel();
   showFloatingText('Progress reset. Start a new mission.', 2200);
   if (gameStarted) restartGame();
 };
@@ -449,6 +461,68 @@ const shipClasses = {
   balanced: { healthMul: 1.0, speedMul: 1.0, desc: 'Balanced stats' },
   drone: { healthMul: 0.95, speedMul: 1.0, desc: 'Drone carrier: deploys drones (future)' }
 };
+
+const ENGINE_PART_STAGE_UNLOCKS = [0, 1500, 5000, 12000];
+const ENGINE_PART_SLOTS = ['engine', 'booster', 'fuel', 'stabilizer'];
+const ENGINE_PARTS = [
+  { id: 'engine_ion_core', slot: 'engine', stage: 1, icon: '⚙️', name: 'Ion Core Mk I', cost: 220, stats: { thrust: 16, weight: 4, efficiency: 10, heat: 6 } },
+  { id: 'engine_vector_nozzle', slot: 'engine', stage: 2, icon: '🌀', name: 'Vector Nozzle', cost: 650, stats: { thrust: 28, weight: 7, efficiency: 14, heat: 12 } },
+  { id: 'engine_starflare', slot: 'engine', stage: 3, icon: '☄️', name: 'Starflare Turbine', cost: 1300, stats: { thrust: 38, weight: 10, efficiency: 18, heat: 17 } },
+  { id: 'engine_quantum_spine', slot: 'engine', stage: 4, icon: '🧠', name: 'Quantum Spine Drive', cost: 2600, stats: { thrust: 50, weight: 11, efficiency: 26, heat: 16 } },
+
+  { id: 'booster_burst_pod', slot: 'booster', stage: 1, icon: '🚀', name: 'Burst Pod', cost: 180, stats: { thrust: 12, weight: 3, efficiency: 4, heat: 8 } },
+  { id: 'booster_dual_afterburn', slot: 'booster', stage: 2, icon: '🔥', name: 'Dual Afterburn', cost: 720, stats: { thrust: 26, weight: 8, efficiency: 8, heat: 16 } },
+  { id: 'booster_comet_ram', slot: 'booster', stage: 3, icon: '🌠', name: 'Comet Ramjet', cost: 1480, stats: { thrust: 34, weight: 9, efficiency: 11, heat: 18 } },
+  { id: 'booster_apex_vector', slot: 'booster', stage: 4, icon: '💥', name: 'Apex Vector Array', cost: 2850, stats: { thrust: 46, weight: 11, efficiency: 14, heat: 20 } },
+
+  { id: 'fuel_econ_cell', slot: 'fuel', stage: 1, icon: '🛢️', name: 'Economy Cell', cost: 160, stats: { thrust: 2, weight: 2, efficiency: 20, heat: 2 } },
+  { id: 'fuel_longhaul_matrix', slot: 'fuel', stage: 2, icon: '🔋', name: 'Longhaul Matrix', cost: 600, stats: { thrust: 4, weight: 5, efficiency: 30, heat: 4 } },
+  { id: 'fuel_cryo_stack', slot: 'fuel', stage: 3, icon: '❄️', name: 'Cryo Stack', cost: 1400, stats: { thrust: 5, weight: 6, efficiency: 42, heat: 3 } },
+  { id: 'fuel_singularity_bladder', slot: 'fuel', stage: 4, icon: '🫧', name: 'Singularity Bladder', cost: 3000, stats: { thrust: 8, weight: 7, efficiency: 54, heat: 5 } },
+
+  { id: 'stabilizer_gimbal', slot: 'stabilizer', stage: 1, icon: '🧭', name: 'Gimbal Stabilizer', cost: 190, stats: { thrust: 5, weight: 2, efficiency: 10, heat: -4 } },
+  { id: 'stabilizer_flight_mesh', slot: 'stabilizer', stage: 2, icon: '📐', name: 'Flight Mesh', cost: 690, stats: { thrust: 8, weight: 3, efficiency: 18, heat: -8 } },
+  { id: 'stabilizer_horizon_gyro', slot: 'stabilizer', stage: 3, icon: '🛰️', name: 'Horizon Gyro', cost: 1520, stats: { thrust: 10, weight: 4, efficiency: 24, heat: -11 } },
+  { id: 'stabilizer_phase_yoke', slot: 'stabilizer', stage: 4, icon: '✨', name: 'Phase Yoke', cost: 3100, stats: { thrust: 13, weight: 4, efficiency: 28, heat: -15 } }
+];
+
+function getDefaultEnginePartsState() {
+  return {
+    equipped: {
+      engine: null,
+      booster: null,
+      fuel: null,
+      stabilizer: null
+    }
+  };
+}
+
+function sanitizeEnginePartsState(input) {
+  const state = getDefaultEnginePartsState();
+  if (!input || typeof input !== 'object' || !input.equipped || typeof input.equipped !== 'object') return state;
+  ENGINE_PART_SLOTS.forEach((slot) => {
+    const value = input.equipped[slot];
+    state.equipped[slot] = typeof value === 'string' ? value : null;
+  });
+  return state;
+}
+
+function getEnginePartById(partId) {
+  return ENGINE_PARTS.find((part) => part.id === partId) || null;
+}
+
+function getEnginePartStage(totalScore) {
+  let stage = 1;
+  for (let i = 0; i < ENGINE_PART_STAGE_UNLOCKS.length; i++) {
+    if ((Number(totalScore) || 0) >= ENGINE_PART_STAGE_UNLOCKS[i]) stage = i + 1;
+  }
+  return stage;
+}
+
+function getEnginePartStageUnlockText(stage) {
+  const threshold = ENGINE_PART_STAGE_UNLOCKS[Math.max(0, stage - 1)] || 0;
+  return `${threshold.toLocaleString()}+`;
+}
 
 const CREW_SPECIALISTS = {
   pilot: { name: 'Pilot Specialist', hireCost: 1600, wagePerMin: 18, desc: 'Improves acceleration and top speed' },
@@ -546,13 +620,97 @@ const PROFESSIONAL_SKINS = {
   }
 };
 
-function getProfessionalSkin(skinId = null) {
-  const fallback = 'neon_blue';
-  let id = skinId;
-  if (!id) {
-    try { id = localStorage.getItem('currentSkin') || fallback; } catch (e) { id = fallback; }
+const STARTER_SKIN_IDS = ['neon_blue', 'crimson_red', 'electric_purple'];
+const SKIN_STORAGE_KEY = 'currentSkin';
+const SKIN_UNLOCK_PREFIX = 'skin_';
+const DEFAULT_SKIN_ID = 'neon_blue';
+const SKIN_SWATCHES = {
+  neon_blue: 'linear-gradient(135deg, #79e7ff, #2563eb 68%, #081534)',
+  crimson_red: 'linear-gradient(135deg, #ff9f9f, #ef4444 62%, #2a0712)',
+  electric_purple: 'linear-gradient(135deg, #d8b4fe, #8b5cf6 62%, #1b1036)',
+  golden_elite: 'linear-gradient(135deg, #ffe69c, #f59e0b 62%, #2b1e06)',
+  obsidian_stealth: 'linear-gradient(135deg, #94a3b8, #334155 62%, #020617)',
+  arctic_ops: 'linear-gradient(135deg, #d6f6ff, #38bdf8 62%, #082032)'
+};
+
+function ensureDefaultSkinOwnership() {
+  try {
+    STARTER_SKIN_IDS.forEach((skinId) => localStorage.setItem(`${SKIN_UNLOCK_PREFIX}${skinId}`, 'true'));
+    if (!localStorage.getItem(SKIN_STORAGE_KEY) || !PROFESSIONAL_SKINS[localStorage.getItem(SKIN_STORAGE_KEY)]) {
+      localStorage.setItem(SKIN_STORAGE_KEY, DEFAULT_SKIN_ID);
+    }
+  } catch (e) {}
+}
+
+function isSkinOwned(skinId) {
+  try {
+    return localStorage.getItem(`${SKIN_UNLOCK_PREFIX}${skinId}`) === 'true';
+  } catch (e) {
+    return skinId === DEFAULT_SKIN_ID;
   }
-  return PROFESSIONAL_SKINS[id] || PROFESSIONAL_SKINS[fallback];
+}
+
+function getCurrentSkinId() {
+  try {
+    const stored = localStorage.getItem(SKIN_STORAGE_KEY);
+    if (stored && PROFESSIONAL_SKINS[stored]) return stored;
+  } catch (e) {}
+  return DEFAULT_SKIN_ID;
+}
+
+function setCurrentSkinId(skinId, options = {}) {
+  if (!PROFESSIONAL_SKINS[skinId]) return false;
+  if (!options.allowLocked && !isSkinOwned(skinId)) return false;
+  try { localStorage.setItem(SKIN_STORAGE_KEY, skinId); } catch (e) {}
+  updateSelectedSkinLabel();
+  renderSkinSelection();
+  updateBuilderPreview();
+  if (gameWorld) applySkin(skinId);
+  return true;
+}
+
+function updateSelectedSkinLabel() {
+  const label = document.getElementById('selectedSkinLabel');
+  if (!label) return;
+  const current = getProfessionalSkin(getCurrentSkinId());
+  label.textContent = `Selected: ${current.label}`;
+}
+
+function renderSkinSelection() {
+  const container = document.getElementById('skinSelection');
+  if (!container) return;
+  const currentId = getCurrentSkinId();
+  const cards = Object.entries(PROFESSIONAL_SKINS).map(([skinId, skin]) => {
+    const owned = isSkinOwned(skinId);
+    const classes = [
+      'skin-card',
+      skinId === currentId ? 'selected' : '',
+      owned ? '' : 'locked'
+    ].filter(Boolean).join(' ');
+    const status = owned ? (skinId === currentId ? 'Active skin' : 'Available') : 'Unlock in shop';
+    return `
+      <button class="${classes}" data-skin-id="${skinId}" ${owned ? '' : 'disabled'} aria-pressed="${skinId === currentId}">
+        <div class="skin-card-swatch" style="background:${SKIN_SWATCHES[skinId] || SKIN_SWATCHES[DEFAULT_SKIN_ID]};"></div>
+        <div class="skin-card-title">${skin.label}</div>
+        <div class="skin-card-meta">${status}</div>
+      </button>
+    `;
+  }).join('');
+
+  container.innerHTML = cards;
+  container.querySelectorAll('[data-skin-id]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const skinId = button.getAttribute('data-skin-id');
+      if (!skinId) return;
+      setCurrentSkinId(skinId);
+    });
+  });
+  updateSelectedSkinLabel();
+}
+
+function getProfessionalSkin(skinId = null) {
+  const id = skinId || getCurrentSkinId();
+  return PROFESSIONAL_SKINS[id] || PROFESSIONAL_SKINS[DEFAULT_SKIN_ID];
 }
 
 function styleMaterial(mat, style) {
@@ -571,7 +729,7 @@ function styleObjectTheme(root, channel, skinId = null) {
   const style = skin[channel];
   if (!style) return;
   root.traverse((child) => {
-    if (!child || !child.isMesh || !child.material) return;
+    if (!child || !child.isMesh || !child.material || (child.userData && child.userData.noTheme)) return;
     if (Array.isArray(child.material)) {
       child.material.forEach((m) => styleMaterial(m, style));
     } else {
@@ -1817,11 +1975,311 @@ class HelperBot {
   }
 }
 
+function markNoTheme(mesh) {
+  if (mesh) mesh.userData.noTheme = true;
+  return mesh;
+}
+
+function createDetailMaterial(color, emissive = 0x000000, emissiveIntensity = 0.12, metalness = 0.72, roughness = 0.34) {
+  return new THREE.MeshStandardMaterial({
+    color,
+    emissive,
+    emissiveIntensity,
+    metalness,
+    roughness
+  });
+}
+
+function getShipSkinDetailProfile(skinId) {
+  const profiles = {
+    neon_blue: {
+      trim: 0xcdefff,
+      glow: 0x6fe5ff,
+      dark: 0x122033,
+      glass: 0x9fe4ff,
+      metal: 0x7b96b5,
+      signature: 'blade'
+    },
+    crimson_red: {
+      trim: 0xffd4d9,
+      glow: 0xff7f8f,
+      dark: 0x2e1218,
+      glass: 0xffb7c3,
+      metal: 0xa67d84,
+      signature: 'talon'
+    },
+    electric_purple: {
+      trim: 0xe4d1ff,
+      glow: 0xb887ff,
+      dark: 0x211733,
+      glass: 0xd7beff,
+      metal: 0x8e80ad,
+      signature: 'arc'
+    },
+    golden_elite: {
+      trim: 0xffefb5,
+      glow: 0xffca55,
+      dark: 0x34270f,
+      glass: 0xffe197,
+      metal: 0xb99f63,
+      signature: 'crown'
+    },
+    obsidian_stealth: {
+      trim: 0xc8d2df,
+      glow: 0x7fb1e0,
+      dark: 0x0d1218,
+      glass: 0x9fb8d1,
+      metal: 0x697687,
+      signature: 'stealth'
+    },
+    arctic_ops: {
+      trim: 0xe8faff,
+      glow: 0x83eaff,
+      dark: 0x132734,
+      glass: 0xbfefff,
+      metal: 0x87a8b3,
+      signature: 'polar'
+    }
+  };
+  return profiles[skinId] || profiles[DEFAULT_SKIN_ID];
+}
+
+function addSymmetricPair(group, factory, x) {
+  const left = factory();
+  const right = factory();
+  left.position.x = -Math.abs(x);
+  right.position.x = Math.abs(x);
+  group.add(left, right);
+  return [left, right];
+}
+
+function addShipStructuralDetails(group, scale, bodyType, tankType, engineType, skinId) {
+  const profile = getShipSkinDetailProfile(skinId);
+  const trimMat = createDetailMaterial(profile.trim, profile.glow, 0.16, 0.78, 0.28);
+  const darkMat = createDetailMaterial(profile.dark, 0x000000, 0.05, 0.82, 0.42);
+  const metalMat = createDetailMaterial(profile.metal, profile.glow, 0.08, 0.74, 0.38);
+  const glowMat = new THREE.MeshStandardMaterial({
+    color: profile.glow,
+    emissive: profile.glow,
+    emissiveIntensity: 1.1,
+    metalness: 0.22,
+    roughness: 0.18
+  });
+  const glassMat = new THREE.MeshPhysicalMaterial({
+    color: profile.glass,
+    emissive: profile.glow,
+    emissiveIntensity: 0.18,
+    metalness: 0.04,
+    roughness: 0.08,
+    transparent: true,
+    opacity: 0.82,
+    transmission: 0.12,
+    clearcoat: 0.85,
+    clearcoatRoughness: 0.12
+  });
+
+  const spine = new THREE.Mesh(
+    new THREE.BoxGeometry(0.4 * scale, 4.8 * scale, 0.28 * scale),
+    trimMat
+  );
+  spine.position.set(0, 0.2 * scale, 0);
+  group.add(spine);
+
+  const canopy = markNoTheme(new THREE.Mesh(
+    new THREE.SphereGeometry(0.62 * scale, 18, 14, 0, Math.PI * 2, 0, Math.PI * 0.55),
+    glassMat
+  ));
+  canopy.scale.set(0.95, 1.5, 0.85);
+  canopy.rotation.x = Math.PI;
+  canopy.position.set(0, 1.05 * scale, 0.18 * scale);
+  group.add(canopy);
+
+  const canopyFrame = new THREE.Mesh(
+    new THREE.TorusGeometry(0.48 * scale, 0.05 * scale, 10, 18),
+    trimMat
+  );
+  canopyFrame.rotation.x = Math.PI / 2;
+  canopyFrame.position.set(0, 1.05 * scale, 0.14 * scale);
+  group.add(canopyFrame);
+
+  const ventFactory = () => {
+    const vent = new THREE.Mesh(new THREE.BoxGeometry(0.18 * scale, 1.7 * scale, 0.46 * scale), darkMat);
+    vent.position.set(0, 0.2 * scale, 0.88 * scale);
+    return vent;
+  };
+  addSymmetricPair(group, ventFactory, 0.72 * scale);
+
+  const plateFactory = () => {
+    const plate = new THREE.Mesh(new THREE.BoxGeometry(0.14 * scale, 2.6 * scale, 1.3 * scale), metalMat);
+    plate.position.set(0, 0.08 * scale, 0);
+    plate.rotation.y = 0.08;
+    return plate;
+  };
+  addSymmetricPair(group, plateFactory, 0.96 * scale);
+
+  const intakeFactory = () => {
+    const intake = new THREE.Mesh(new THREE.CylinderGeometry(0.22 * scale, 0.3 * scale, 0.6 * scale, 12), darkMat);
+    intake.rotation.z = Math.PI / 2;
+    intake.position.set(0, 0.55 * scale, 0.95 * scale);
+    return intake;
+  };
+  addSymmetricPair(group, intakeFactory, 0.74 * scale);
+
+  const glowStripFactory = () => {
+    const strip = new THREE.Mesh(new THREE.BoxGeometry(0.05 * scale, 2.2 * scale, 0.08 * scale), glowMat);
+    strip.position.set(0, 0.25 * scale, 0.71 * scale);
+    return strip;
+  };
+  addSymmetricPair(group, glowStripFactory, 0.42 * scale);
+
+  const pipeFactory = () => {
+    const pipe = new THREE.Mesh(new THREE.TorusGeometry(0.24 * scale, 0.03 * scale, 8, 16, Math.PI), metalMat);
+    pipe.rotation.y = Math.PI / 2;
+    pipe.position.set(0, -1.15 * scale, 0.7 * scale);
+    return pipe;
+  };
+  addSymmetricPair(group, pipeFactory, 0.54 * scale);
+
+  const rearAssembly = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.72 * scale, 0.86 * scale, 0.72 * scale, 16),
+    darkMat
+  );
+  rearAssembly.position.set(0, -2.1 * scale, 0);
+  group.add(rearAssembly);
+
+  const bellFactory = () => {
+    const bell = new THREE.Mesh(new THREE.CylinderGeometry(0.18 * scale, 0.34 * scale, 0.58 * scale, 12), metalMat);
+    bell.position.set(0, -2.55 * scale, 0.34 * scale);
+    return bell;
+  };
+  addSymmetricPair(group, bellFactory, 0.34 * scale);
+
+  const sensorMast = new THREE.Mesh(new THREE.BoxGeometry(0.08 * scale, 0.9 * scale, 0.08 * scale), trimMat);
+  sensorMast.position.set(0, 2.45 * scale, -0.1 * scale);
+  group.add(sensorMast);
+
+  const sensorEye = new THREE.Mesh(new THREE.SphereGeometry(0.12 * scale, 10, 10), glowMat);
+  sensorEye.position.set(0, 2.88 * scale, -0.1 * scale);
+  group.add(sensorEye);
+
+  if (bodyType === 'sleek') {
+    const bladeFactory = () => {
+      const blade = new THREE.Mesh(new THREE.BoxGeometry(0.08 * scale, 2.4 * scale, 1.3 * scale), trimMat);
+      blade.position.set(0, 0.35 * scale, -0.55 * scale);
+      blade.rotation.z = 0.32;
+      return blade;
+    };
+    addSymmetricPair(group, bladeFactory, 1.22 * scale);
+  } else if (bodyType === 'heavy') {
+    const armorFactory = () => {
+      const armor = new THREE.Mesh(new THREE.BoxGeometry(0.42 * scale, 1.8 * scale, 1.5 * scale), darkMat);
+      armor.position.set(0, -0.15 * scale, 1.02 * scale);
+      return armor;
+    };
+    addSymmetricPair(group, armorFactory, 1.24 * scale);
+  } else {
+    const ringPylonFactory = () => {
+      const pylon = new THREE.Mesh(new THREE.BoxGeometry(0.1 * scale, 0.72 * scale, 0.12 * scale), trimMat);
+      pylon.position.set(0, -0.22 * scale, 0.98 * scale);
+      return pylon;
+    };
+    addSymmetricPair(group, ringPylonFactory, 0.72 * scale);
+  }
+
+  if (tankType === 'turbo') {
+    const turboFinFactory = () => {
+      const fin = new THREE.Mesh(new THREE.BoxGeometry(0.1 * scale, 0.95 * scale, 0.74 * scale), glowMat);
+      fin.position.set(0, -1.85 * scale, 0.48 * scale);
+      fin.rotation.z = 0.2;
+      return fin;
+    };
+    addSymmetricPair(group, turboFinFactory, 1.02 * scale);
+  } else if (tankType === 'economy') {
+    const tankBand = new THREE.Mesh(new THREE.TorusGeometry(0.72 * scale, 0.05 * scale, 8, 18), trimMat);
+    tankBand.rotation.x = Math.PI / 2;
+    tankBand.position.set(0, -1.28 * scale, 0);
+    group.add(tankBand);
+  } else {
+    const braceFactory = () => {
+      const brace = new THREE.Mesh(new THREE.BoxGeometry(0.08 * scale, 0.9 * scale, 0.58 * scale), metalMat);
+      brace.position.set(0, -1.22 * scale, 0.6 * scale);
+      return brace;
+    };
+    addSymmetricPair(group, braceFactory, 0.52 * scale);
+  }
+
+  if (engineType === 'plasma') {
+    const plasmaRing = new THREE.Mesh(new THREE.TorusGeometry(0.42 * scale, 0.04 * scale, 8, 18), glowMat);
+    plasmaRing.rotation.x = Math.PI / 2;
+    plasmaRing.position.set(0, 2.72 * scale, 0);
+    group.add(plasmaRing);
+  } else if (engineType === 'missile') {
+    const podFactory = () => {
+      const pod = new THREE.Mesh(new THREE.BoxGeometry(0.42 * scale, 1.2 * scale, 0.6 * scale), darkMat);
+      pod.position.set(0, 2.72 * scale, 0.54 * scale);
+      return pod;
+    };
+    addSymmetricPair(group, podFactory, 0.46 * scale);
+  } else {
+    const emitter = new THREE.Mesh(new THREE.CylinderGeometry(0.18 * scale, 0.18 * scale, 0.7 * scale, 12), glowMat);
+    emitter.position.set(0, 2.7 * scale, 0);
+    group.add(emitter);
+  }
+
+  if (profile.signature === 'blade') {
+    const strakeFactory = () => {
+      const strake = new THREE.Mesh(new THREE.BoxGeometry(0.06 * scale, 1.55 * scale, 0.72 * scale), trimMat);
+      strake.position.set(0, 1.58 * scale, -0.28 * scale);
+      strake.rotation.z = 0.24;
+      return strake;
+    };
+    addSymmetricPair(group, strakeFactory, 0.9 * scale);
+  } else if (profile.signature === 'talon') {
+    const hornFactory = () => {
+      const horn = new THREE.Mesh(new THREE.ConeGeometry(0.12 * scale, 0.86 * scale, 10), trimMat);
+      horn.position.set(0, 2.18 * scale, 0.44 * scale);
+      horn.rotation.z = Math.PI * 0.16;
+      return horn;
+    };
+    addSymmetricPair(group, hornFactory, 0.56 * scale);
+  } else if (profile.signature === 'arc') {
+    const arc = new THREE.Mesh(new THREE.TorusGeometry(0.92 * scale, 0.05 * scale, 10, 22, Math.PI * 1.18), glowMat);
+    arc.rotation.z = Math.PI / 2;
+    arc.position.set(0, 0.62 * scale, -0.1 * scale);
+    group.add(arc);
+  } else if (profile.signature === 'crown') {
+    const crownFactory = () => {
+      const crown = new THREE.Mesh(new THREE.BoxGeometry(0.08 * scale, 0.8 * scale, 0.08 * scale), trimMat);
+      crown.position.set(0, 2.35 * scale, 0.18 * scale);
+      crown.rotation.z = 0.18;
+      return crown;
+    };
+    addSymmetricPair(group, crownFactory, 0.28 * scale);
+  } else if (profile.signature === 'stealth') {
+    const stealthWingFactory = () => {
+      const wing = new THREE.Mesh(new THREE.BoxGeometry(0.08 * scale, 1.5 * scale, 1.05 * scale), darkMat);
+      wing.position.set(0, 0.18 * scale, -0.62 * scale);
+      wing.rotation.z = 0.44;
+      return wing;
+    };
+    addSymmetricPair(group, stealthWingFactory, 1.06 * scale);
+  } else if (profile.signature === 'polar') {
+    const polarVaneFactory = () => {
+      const vane = new THREE.Mesh(new THREE.BoxGeometry(0.06 * scale, 1.6 * scale, 0.3 * scale), glowMat);
+      vane.position.set(0, 1.38 * scale, 0.62 * scale);
+      vane.rotation.z = 0.12;
+      return vane;
+    };
+    addSymmetricPair(group, polarVaneFactory, 0.62 * scale);
+  }
+}
+
 function buildShipVisual(config) {
   const scale = config.scale || 1.0;
   const bodyType = config.bodyType || 'balanced';
   const tankType = config.tankType || 'standard';
   const engineType = config.engineType || 'pulse';
+  const skinId = config.skinId || getCurrentSkinId();
 
   const group = new THREE.Group();
 
@@ -1915,7 +2373,10 @@ function buildShipVisual(config) {
   const thrusterMat = new THREE.MeshStandardMaterial({ color: 0x00aaff, emissive: 0x0088ff, emissiveIntensity: 2 });
   const thruster = new THREE.Mesh(new THREE.SphereGeometry(0.3 * scale, 16, 16), thrusterMat);
   thruster.position.set(0, -2.5 * scale, 0);
+  markNoTheme(thruster);
   group.add(thruster);
+
+  addShipStructuralDetails(group, scale, bodyType, tankType, engineType, skinId);
 
   group.rotation.x = Math.PI / 2;
 
@@ -2066,10 +2527,110 @@ class Ship {
     this.refreshStageVisuals();
     
     // Apply current skin
-    const currentSkin = localStorage.getItem('currentSkin');
+    const currentSkin = getCurrentSkinId();
     if (currentSkin) {
       setTimeout(() => applySkin(currentSkin), 100); // Delay to ensure mesh is ready
     }
+  }
+
+  setEnginePartsState(state) {
+    this.enginePartsState = sanitizeEnginePartsState(state);
+  }
+
+  getEquippedEnginePart(slot) {
+    const partId = this.enginePartsState && this.enginePartsState.equipped ? this.enginePartsState.equipped[slot] : null;
+    return partId ? getEnginePartById(partId) : null;
+  }
+
+  computeEnginePartEffect(part) {
+    if (!part || !part.stats) {
+      return {
+        accelDelta: 0,
+        maxSpeedDelta: 0,
+        maxFuelDelta: 0,
+        fuelConsumptionMul: 1,
+        shieldRegenDelta: 0,
+        fireRateMul: 1
+      };
+    }
+    const thrust = Number(part.stats.thrust) || 0;
+    const weight = Number(part.stats.weight) || 0;
+    const efficiency = Number(part.stats.efficiency) || 0;
+    const heat = Number(part.stats.heat) || 0;
+    return {
+      accelDelta: thrust * 0.0032 - weight * 0.0011,
+      maxSpeedDelta: thrust * 0.085 - weight * 0.03,
+      maxFuelDelta: efficiency * 2.4 - weight * 0.55,
+      fuelConsumptionMul: THREE.MathUtils.clamp(1 - efficiency * 0.008 + weight * 0.003, 0.72, 1.32),
+      shieldRegenDelta: efficiency * 0.0024 - Math.max(0, heat) * 0.00035,
+      fireRateMul: THREE.MathUtils.clamp(1 + Math.max(0, heat) * 0.012 - efficiency * 0.0045, 0.84, 1.36)
+    };
+  }
+
+  removeEnginePartEffect(effect) {
+    if (!effect) return;
+    this.acceleration = Math.max(0.03, this.acceleration - (effect.accelDelta || 0));
+    this.maxSpeed = Math.max(1, this.maxSpeed - (effect.maxSpeedDelta || 0));
+    this.maxFuel = Math.max(50, this.maxFuel - (effect.maxFuelDelta || 0));
+    this.fuel = Math.min(this.fuel, this.maxFuel);
+    this.fuelConsumption = Math.max(0.01, this.fuelConsumption / (effect.fuelConsumptionMul || 1));
+    this.shieldRegenRate = Math.max(0, this.shieldRegenRate - (effect.shieldRegenDelta || 0));
+    if (this.weaponConfig) {
+      this.weaponConfig.fireRate = Math.max(20, Math.round(this.weaponConfig.fireRate / (effect.fireRateMul || 1)));
+    }
+  }
+
+  applyEnginePartEffect(effect) {
+    if (!effect) return;
+    this.acceleration = Math.max(0.03, this.acceleration + (effect.accelDelta || 0));
+    this.maxSpeed = Math.max(1, this.maxSpeed + (effect.maxSpeedDelta || 0));
+    this.maxFuel = Math.max(50, this.maxFuel + (effect.maxFuelDelta || 0));
+    this.fuel = Math.min(this.maxFuel, this.fuel + Math.max(0, effect.maxFuelDelta || 0));
+    this.fuelConsumption = Math.max(0.01, this.fuelConsumption * (effect.fuelConsumptionMul || 1));
+    this.shieldRegenRate = Math.max(0, this.shieldRegenRate + (effect.shieldRegenDelta || 0));
+    if (this.weaponConfig) {
+      this.weaponConfig.fireRate = Math.max(20, Math.round(this.weaponConfig.fireRate * (effect.fireRateMul || 1)));
+    }
+  }
+
+  getTotalEnginePartEffect() {
+    const total = {
+      accelDelta: 0,
+      maxSpeedDelta: 0,
+      maxFuelDelta: 0,
+      fuelConsumptionMul: 1,
+      shieldRegenDelta: 0,
+      fireRateMul: 1
+    };
+    const effects = this._enginePartEffects || {};
+    Object.values(effects).forEach((effect) => {
+      if (!effect) return;
+      total.accelDelta += effect.accelDelta || 0;
+      total.maxSpeedDelta += effect.maxSpeedDelta || 0;
+      total.maxFuelDelta += effect.maxFuelDelta || 0;
+      total.fuelConsumptionMul *= effect.fuelConsumptionMul || 1;
+      total.shieldRegenDelta += effect.shieldRegenDelta || 0;
+      total.fireRateMul *= effect.fireRateMul || 1;
+    });
+    return total;
+  }
+
+  equipEnginePart(slot, part) {
+    if (!ENGINE_PART_SLOTS.includes(slot) || !part || part.slot !== slot) return false;
+    if (!this.enginePartsState) this.enginePartsState = getDefaultEnginePartsState();
+    if (!this._enginePartEffects) this._enginePartEffects = {};
+
+    const previousPartId = this.enginePartsState.equipped[slot];
+    const previousPart = previousPartId ? getEnginePartById(previousPartId) : null;
+    if (previousPart && this._enginePartEffects[slot]) {
+      this.removeEnginePartEffect(this._enginePartEffects[slot]);
+    }
+
+    const nextEffect = this.computeEnginePartEffect(part);
+    this.applyEnginePartEffect(nextEffect);
+    this._enginePartEffects[slot] = nextEffect;
+    this.enginePartsState.equipped[slot] = part.id;
+    return true;
   }
 
   updatePhysics(keys, planets) {
@@ -2229,21 +2790,16 @@ class Ship {
     const engineActive = !this.landed && this.fuel > 0.05;
     const backOffset = new THREE.Vector3(0, 0, 2.8 * this.scale).applyQuaternion(this.mesh.quaternion);
     const sample = this.position.clone().add(backOffset);
-    if (engineActive && (isMoving || this.velocity.length() > 0.6)) {
-      this.trailHistory.push(sample);
-      if (this.trailHistory.length > 90) this.trailHistory.shift();
-    } else if (this.trailHistory.length > 0) {
-      this.trailHistory.shift();
-    }
+    this.trailHistory.length = 0;
     const arr = this.engineTrail.geometry.attributes.position.array;
     for (let i = 0; i < 90; i++) {
-      const p = this.trailHistory[i] || sample;
+      const p = sample;
       arr[i * 3] = p.x;
       arr[i * 3 + 1] = p.y;
       arr[i * 3 + 2] = p.z;
     }
     this.engineTrail.geometry.attributes.position.needsUpdate = true;
-    this.engineTrail.material.opacity = engineActive ? Math.min(0.75, 0.15 + this.velocity.length() * 0.04) : 0;
+    this.engineTrail.material.opacity = 0;
   }
 
   applyGravity(planets) {
@@ -2313,8 +2869,8 @@ class Ship {
 
     if (engineActive) {
       updateLayer(this._corePositions, this._coreState, this._thrusterCoreCount, 0.96 * vfxMul, 0.56, 0.045, 0.93, 0.0008);
-      updateLayer(this._exhaustPositions, this._exhaustState, this._thrusterExhaustCount, 0.86 * vfxMul, 0.34, 0.12, 0.955, 0.0013);
-      updateLayer(this._smokePositions, this._smokeState, this._thrusterSmokeCount, 0.76 * vfxMul, 0.17, 0.17, 0.975, 0.0024);
+      for (let i = 0; i < this._exhaustPositions.length; i++) this._exhaustPositions[i] = 999999;
+      for (let i = 0; i < this._smokePositions.length; i++) this._smokePositions[i] = 999999;
     } else {
       for (let i = 0; i < this._corePositions.length; i++) this._corePositions[i] = 999999;
       for (let i = 0; i < this._exhaustPositions.length; i++) this._exhaustPositions[i] = 999999;
@@ -2324,9 +2880,9 @@ class Ship {
     this.thrusterParticles.geometry.attributes.position.needsUpdate = true;
     this.exhaustParticles.geometry.attributes.position.needsUpdate = true;
     this.smokeParticles.geometry.attributes.position.needsUpdate = true;
-    this.thrusterParticles.material.opacity = engineActive ? THREE.MathUtils.clamp((0.5 + throttle * 0.5) * vfxMul, 0.08, 1) : 0;
-    this.exhaustParticles.material.opacity = engineActive ? THREE.MathUtils.clamp((0.18 + throttle * 0.52) * vfxMul, 0.06, 0.85) : 0;
-    this.smokeParticles.material.opacity = engineActive ? THREE.MathUtils.clamp((0.08 + speedRatio * 0.2) * vfxMul, 0.04, 0.34) : 0;
+    this.thrusterParticles.material.opacity = engineActive ? THREE.MathUtils.clamp((0.42 + throttle * 0.35) * vfxMul, 0.06, 0.75) : 0;
+    this.exhaustParticles.material.opacity = 0;
+    this.smokeParticles.material.opacity = 0;
     
     // Damage particles when health is low
     if (this.health < this.maxHealth * 0.3) {
@@ -2640,6 +3196,8 @@ class GameWorld {
     this.maxEnemies = 5;
     this.score = 0;
     this.kills = 0;
+    this.totalScoreEarned = 0;
+    this._scoreTrackerLast = 0;
     this.powerUpsCollected = 0;
     
     // Mission System
@@ -2705,6 +3263,7 @@ class GameWorld {
     this._lastAlienWaveAt = Date.now();
     this._alienWaveIntervalMs = 18000;
     this._alienWaveNumber = 0;
+    this.enginePartsState = getDefaultEnginePartsState();
     this.aiCivilizations = [];
     this._lastEmpireTickAt = Date.now();
     this._empireTickMs = 6500;
@@ -2820,6 +3379,7 @@ class GameWorld {
     this.enemySpawnZ = this.ship.position.z;
     this.enemySpawnX = this.ship.position.x;
     this.enemySpawnY = this.ship.position.y;
+    this._scoreTrackerLast = this.score;
     // Track player resources
     this.resources = { minerals: 0, salvage: 0 };
   }
@@ -4474,6 +5034,11 @@ class GameWorld {
           this.upgradePoints += 25;
       }
 
+      if (this.score > this._scoreTrackerLast) {
+        this.totalScoreEarned += this.score - this._scoreTrackerLast;
+      }
+      this._scoreTrackerLast = this.score;
+
       // Passive income from satellite tiers and Dyson swarms.
       const nowPassive = Date.now();
       const elapsedMs = Math.max(0, nowPassive - (this._lastSatelliteTick || nowPassive));
@@ -4497,6 +5062,8 @@ class GameWorld {
       if (this.ship.health <= 0) {
           triggerGameOver();
       }
+
+      if (window.updateEnginePartsUI) updateEnginePartsUI();
   }
 
   getStats() {
@@ -4520,6 +5087,7 @@ class GameWorld {
       shield: this.ship.shieldHealth.toFixed(0),
       ammo: this.ship.ammo,
       score: this.score,
+      totalScore: this.totalScoreEarned,
       kills: this.kills,
       cooldown: Math.ceil(this.ship.shootCooldown / 10)
     };
@@ -4529,7 +5097,6 @@ class GameWorld {
 // ===================== SCENE SETUP =====================
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x000000);
-
 const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100000);
 camera.position.set(0, 6, 18);
 
@@ -4541,6 +5108,8 @@ renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 document.body.appendChild(renderer.domElement);
 renderer.domElement.style.pointerEvents = 'none';
 renderer.domElement.style.zIndex = '-1';
+renderer.domElement.style.position = 'fixed';
+renderer.domElement.style.inset = '0';
 
 scene.add(new THREE.AmbientLight(0xffffff, 0.5));
 const sunLight = new THREE.DirectionalLight(0xffffff, 1.0);
@@ -4709,7 +5278,7 @@ function countOwnedSkins() {
   const ids = Object.keys(PROFESSIONAL_SKINS || {});
   let total = 0;
   for (let i = 0; i < ids.length; i++) {
-    if (localStorage.getItem(`skin_${ids[i]}`) === 'true') total++;
+    if (isSkinOwned(ids[i])) total++;
   }
   return total;
 }
@@ -4791,11 +5360,13 @@ function updateBuilderPreview() {
     scale: bodyConfig.scale,
     bodyType,
     tankType: shipChoice.tank || 'standard',
-    engineType: shipChoice.engine || 'pulse'
+    engineType: shipChoice.engine || 'pulse',
+    skinId: getCurrentSkinId()
   };
   const preview = buildShipVisual(previewConfig);
   builderShip = preview.group;
   builderShip.position.set(0, -0.1, 0);
+  styleObjectTheme(builderShip, 'player', getCurrentSkinId());
   builderScene.add(builderShip);
 }
 
@@ -4847,7 +5418,7 @@ function updateShopUI() {
 
   shopItems.innerHTML = items.map((item) => {
     if (item.type === 'skin') {
-      const owned = localStorage.getItem(`skin_${item.skinId}`) === 'true';
+      const owned = isSkinOwned(item.skinId);
       const dynamicPrice = getDynamicSkinCost(item.price, item.skinId);
       return `
       <div class="shopItem">
@@ -5541,17 +6112,18 @@ window.buySkin = function(skinId, cost) {
   }
   
   // Check if already owned
-  if (localStorage.getItem(`skin_${skinId}`) === 'true') {
+  if (isSkinOwned(skinId)) {
     showFloatingText('You already own this skin!', 1600);
     return;
   }
   
   gameWorld.score -= effectiveCost;
-  localStorage.setItem(`skin_${skinId}`, 'true');
-  localStorage.setItem('currentSkin', skinId);
+  localStorage.setItem(`${SKIN_UNLOCK_PREFIX}${skinId}`, 'true');
+  setCurrentSkinId(skinId, { allowLocked: true });
   
   // Apply skin immediately
   applySkin(skinId);
+  renderSkinSelection();
   
   updateShopUI();
   updateHUD();
@@ -5691,6 +6263,198 @@ window.openUpgrades = function() {
 window.toggleHUD = function() {
   const hudContent = document.getElementById('hudContent');
   hudContent.style.display = hudContent.style.display === 'none' ? 'block' : 'none';
+};
+
+function getEnginePartsPanel() {
+  return document.getElementById('enginePartsPanel');
+}
+
+function getEnginePartsStageParts(totalScore) {
+  const stage = getEnginePartStage(totalScore);
+  return {
+    stage,
+    parts: ENGINE_PARTS.filter((part) => part.stage <= stage)
+  };
+}
+
+function getShipEngineAggregateStats(ship) {
+  const state = ship && ship.enginePartsState ? ship.enginePartsState : getDefaultEnginePartsState();
+  const totals = { thrust: 0, weight: 0, efficiency: 0, heat: 0 };
+  ENGINE_PART_SLOTS.forEach((slot) => {
+    const partId = state.equipped[slot];
+    const part = partId ? getEnginePartById(partId) : null;
+    if (!part || !part.stats) return;
+    totals.thrust += Number(part.stats.thrust) || 0;
+    totals.weight += Number(part.stats.weight) || 0;
+    totals.efficiency += Number(part.stats.efficiency) || 0;
+    totals.heat += Number(part.stats.heat) || 0;
+  });
+  return totals;
+}
+
+function setEnginePartCardShake(partId) {
+  const card = document.querySelector(`.engine-part-card[data-part-id="${partId}"]`);
+  if (!card) return;
+  card.classList.remove('shake');
+  void card.offsetWidth;
+  card.classList.add('shake');
+  window.setTimeout(() => card.classList.remove('shake'), 360);
+}
+
+function bindEngineSlotDropzones() {
+  document.querySelectorAll('.engine-slot[data-slot]').forEach((slotEl) => {
+    if (slotEl.dataset.boundDrop === '1') return;
+    slotEl.dataset.boundDrop = '1';
+    slotEl.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      slotEl.classList.add('drag-over');
+    });
+    slotEl.addEventListener('dragleave', () => {
+      slotEl.classList.remove('drag-over');
+    });
+    slotEl.addEventListener('drop', (e) => {
+      e.preventDefault();
+      slotEl.classList.remove('drag-over');
+      const partId = e.dataTransfer ? e.dataTransfer.getData('text/plain') : '';
+      const slot = slotEl.getAttribute('data-slot');
+      if (!partId || !slot) return;
+      equipEnginePartFromShop(partId, slot);
+    });
+  });
+}
+
+window.updateEnginePartsUI = function() {
+  const panel = getEnginePartsPanel();
+  if (!panel) return;
+
+  const list = document.getElementById('enginePartsList');
+  const statsEl = document.getElementById('engineLiveStats');
+  const currentScore = gameWorld ? Math.floor(gameWorld.score || 0) : 0;
+  const totalScore = gameWorld ? Math.floor(gameWorld.totalScoreEarned || gameWorld.score || 0) : 0;
+  const unlocked = getEnginePartsStageParts(totalScore);
+
+  const stageEl = document.getElementById('enginePartsStage');
+  const unlockEl = document.getElementById('enginePartsUnlockText');
+  const currentScoreEl = document.getElementById('enginePartsCurrentScore');
+  const totalScoreEl = document.getElementById('enginePartsTotalScore');
+  if (stageEl) stageEl.textContent = String(unlocked.stage);
+  if (unlockEl) unlockEl.textContent = getEnginePartStageUnlockText(unlocked.stage);
+  if (currentScoreEl) currentScoreEl.textContent = currentScore.toLocaleString();
+  if (totalScoreEl) totalScoreEl.textContent = totalScore.toLocaleString();
+
+  if (gameWorld && gameWorld.ship) {
+    ENGINE_PART_SLOTS.forEach((slot) => {
+      const part = gameWorld.ship.getEquippedEnginePart(slot);
+      const valueEl = document.getElementById(`engineSlot-${slot}`);
+      if (!valueEl) return;
+      valueEl.textContent = part ? `${part.icon} ${part.name}` : 'Empty';
+    });
+    const totals = getShipEngineAggregateStats(gameWorld.ship);
+    statsEl.innerHTML = [
+      `Thrust: ${totals.thrust}`,
+      `Weight: ${totals.weight}`,
+      `Efficiency: ${totals.efficiency}`,
+      `Heat: ${totals.heat}`,
+      `Accel: ${gameWorld.ship.acceleration.toFixed(3)}`,
+      `Top Speed: ${gameWorld.ship.maxSpeed.toFixed(1)}`,
+      `Fuel Cap: ${Math.round(gameWorld.ship.maxFuel)}`,
+      `Fire Rate: ${Math.round(gameWorld.ship.weaponConfig.fireRate)}ms`
+    ].map((line) => `<div class="engine-live-stat">${line}</div>`).join('');
+  } else {
+    statsEl.innerHTML = '<div class="engine-live-stat">Launch a mission to install parts.</div>';
+  }
+
+  list.innerHTML = ENGINE_PARTS.map((part) => {
+    const locked = part.stage > unlocked.stage;
+    const equipped = gameWorld && gameWorld.ship && gameWorld.ship.getEquippedEnginePart(part.slot) && gameWorld.ship.getEquippedEnginePart(part.slot).id === part.id;
+    return `
+      <div class="engine-part-card ${locked ? 'locked' : ''}" data-part-id="${part.id}" draggable="${locked ? 'false' : 'true'}">
+        <div class="engine-part-icon">${part.icon}</div>
+        <div class="engine-part-main">
+          <div class="engine-part-title">${part.name}</div>
+          <div class="engine-part-subtitle">${part.slot.toUpperCase()} slot</div>
+          <div class="engine-part-stat-grid">
+            <div class="engine-part-stat">Thrust: ${part.stats.thrust}</div>
+            <div class="engine-part-stat">Weight: ${part.stats.weight}</div>
+            <div class="engine-part-stat">Efficiency: ${part.stats.efficiency}</div>
+            <div class="engine-part-stat">Heat: ${part.stats.heat}</div>
+          </div>
+        </div>
+        <div class="engine-part-tags">
+          <div class="engine-part-cost">⭐ ${part.cost}</div>
+          <div class="engine-tag">Stage ${part.stage}</div>
+          ${equipped ? '<div class="engine-tag">Equipped</div>' : ''}
+          ${locked ? '<div class="engine-tag">Locked</div>' : ''}
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  list.querySelectorAll('.engine-part-card[draggable="true"]').forEach((card) => {
+    card.addEventListener('dragstart', (e) => {
+      const partId = card.getAttribute('data-part-id');
+      if (!partId || !e.dataTransfer) return;
+      e.dataTransfer.setData('text/plain', partId);
+      e.dataTransfer.effectAllowed = 'move';
+    });
+  });
+
+  bindEngineSlotDropzones();
+};
+
+window.toggleEnginePartsPanel = function(forceOpen) {
+  const panel = getEnginePartsPanel();
+  if (!panel) return;
+  const nextOpen = typeof forceOpen === 'boolean' ? forceOpen : !panel.classList.contains('open');
+  panel.classList.toggle('open', nextOpen);
+  panel.setAttribute('aria-hidden', nextOpen ? 'false' : 'true');
+  if (nextOpen) updateEnginePartsUI();
+};
+
+window.initializeEnginePartsForCurrentShip = function() {
+  if (!gameWorld || !gameWorld.ship) return;
+  const savedState = sanitizeEnginePartsState(gameWorld.enginePartsState);
+  gameWorld.ship.setEnginePartsState(savedState);
+  ENGINE_PART_SLOTS.forEach((slot) => {
+    const partId = savedState.equipped[slot];
+    const part = partId ? getEnginePartById(partId) : null;
+    if (part) gameWorld.ship.equipEnginePart(slot, part);
+  });
+  updateEnginePartsUI();
+};
+
+window.equipEnginePartFromShop = function(partId, targetSlot) {
+  if (!gameWorld || !gameWorld.ship) return;
+  const part = getEnginePartById(partId);
+  if (!part || part.slot !== targetSlot) return;
+  const equipped = gameWorld.ship.getEquippedEnginePart(targetSlot);
+  if (equipped && equipped.id === part.id) {
+    showFloatingText(`${part.name} already equipped`, 1300);
+    return;
+  }
+
+  const totalScore = Math.floor(gameWorld.totalScoreEarned || gameWorld.score || 0);
+  const unlockedStage = getEnginePartStage(totalScore);
+  if (part.stage > unlockedStage) {
+    showFloatingText('Part stage not unlocked yet', 1700);
+    setEnginePartCardShake(partId);
+    return;
+  }
+
+  if (gameWorld.score < part.cost) {
+    showFloatingText('Not enough score', 1700);
+    setEnginePartCardShake(partId);
+    return;
+  }
+
+  gameWorld.score -= part.cost;
+  gameWorld._scoreTrackerLast = gameWorld.score;
+  gameWorld.ship.equipEnginePart(targetSlot, part);
+  gameWorld.enginePartsState = sanitizeEnginePartsState(gameWorld.ship.enginePartsState);
+  updateEnginePartsUI();
+  updateHUD();
+  showFloatingText(`${part.name} equipped`, 1500);
+  playSound('pickup');
 };
 
 // ===================== TUTORIAL SYSTEM =====================
@@ -5847,8 +6611,32 @@ function startTutorialSequence() {
   showTutorialStep(tutorialStep);
 }
 
+window.openShipBuilder = function() {
+  const titleScreen = document.getElementById('titleScreen');
+  const shipBuilder = document.getElementById('shipBuilder');
+  if (titleScreen) {
+    titleScreen.classList.add('fade-out');
+    window.setTimeout(() => {
+      titleScreen.style.display = 'none';
+    }, 720);
+  }
+  if (shipBuilder) shipBuilder.style.display = 'block';
+  ensureDefaultSkinOwnership();
+  renderSkinSelection();
+  updateSelectedSkinLabel();
+  initBuilderPreview();
+  updateBuilderPreview();
+};
+
 window.addEventListener('load', () => {
+  ensureDefaultSkinOwnership();
   initSettingsBar();
+  renderSkinSelection();
+  updateSelectedSkinLabel();
+  initBuilderPreview();
+  bindEngineSlotDropzones();
+  updateEnginePartsUI();
+  document.getElementById('shipBuilder').style.display = 'none';
   updateStartButtonState();
   syncTutorialProgressLabel();
   closeTutorial(false);
@@ -5871,6 +6659,8 @@ window.startGame = function() {
   const jp = document.getElementById('journalPanel');
   if (jp) jp.style.display = 'none';
   document.getElementById('shipBuilder').style.display = 'none';
+  const titleScreen = document.getElementById('titleScreen');
+  if (titleScreen) titleScreen.style.display = 'none';
   document.getElementById('gameOverOverlay').style.display = 'none';
   document.getElementById('shopButton').style.display = 'block';
   document.getElementById('upgradeButton').style.display = 'block';
@@ -5879,6 +6669,7 @@ window.startGame = function() {
   document.getElementById('craftingButton').style.display = 'block';
   document.getElementById('moduleButton').style.display = 'block';
   document.getElementById('techButton').style.display = 'block';
+  document.getElementById('enginePartsButton').style.display = 'block';
   document.getElementById('missionPanel').style.display = 'block';
   const upgradePanelEl = document.getElementById('upgradePanel');
   upgradePanelEl.style.display = 'none';
@@ -5901,7 +6692,8 @@ window.startGame = function() {
     scale: bodyConfig.scale,
     bodyType: shipChoice.body,
     tankType: shipChoice.tank,
-    engineType: shipChoice.engine
+    engineType: shipChoice.engine,
+    skinId: getCurrentSkinId()
   };
   // Apply ship class modifiers
   const cls = shipChoice.shipClass;
@@ -5921,6 +6713,7 @@ window.startGame = function() {
   // Expose module-scoped gameWorld to non-module scripts (overlays expect window.gameWorld)
   window.gameWorld = gameWorld;
   gameWorld.initializeShip(finalConfig);
+  initializeEnginePartsForCurrentShip();
   applyLiveGameplaySettings();
   gameWorld.generateInitialPlanets();
   if (canLoadProgress) {
@@ -5935,7 +6728,7 @@ window.startGame = function() {
   } else {
     gameWorld.logEvent('Mission launched');
   }
-  applySkin(localStorage.getItem('currentSkin') || 'neon_blue');
+  applySkin(getCurrentSkinId());
   startBackgroundMusic();
   
   // Spawn initial enemies everywhere around the ship
@@ -6047,6 +6840,7 @@ function updateTouchControlsVisibility() {
     isElementVisible('upgradePanel') ||
     isElementVisible('moduleOverlay') ||
     isElementVisible('techOverlay') ||
+    (getEnginePartsPanel() && getEnginePartsPanel().classList.contains('open')) ||
     isElementVisible('tutorialOverlay') ||
     isElementVisible('pauseOverlay') ||
     isElementVisible('gameOverOverlay')
@@ -6705,8 +7499,10 @@ window.restartGame = function() {
   document.getElementById('upgradeButton').style.display = 'none';
   document.getElementById('inventoryButton').style.display = 'none';
   document.getElementById('craftingButton').style.display = 'none';
+  document.getElementById('enginePartsButton').style.display = 'none';
   document.getElementById('missionPanel').style.display = 'none';
   document.getElementById('upgradePanel').style.display = 'none';
+  toggleEnginePartsPanel(false);
   document.getElementById('inventoryOverlay').style.display = 'none';
   document.getElementById('craftingOverlay').style.display = 'none';
   const lb = document.getElementById('leaderboardPanel');
@@ -6714,6 +7510,7 @@ window.restartGame = function() {
   // Clear global reference so overlays show correct state
   window.gameWorld = null;
   document.getElementById('shipBuilder').style.display = 'block';
+  updateBuilderPreview();
   document.getElementById('gameOverOverlay').style.display = 'none';
 }
 
@@ -6871,6 +7668,16 @@ function updateHUD() {
     document.getElementById('hudContent').appendChild(el);
   }
   document.getElementById('resourceLabel').textContent = `\u26CF\uFE0F Minerals: ${minerals} | \u2699 Salvage: ${salvage} | Drones C/H: ${droneCombat}/${droneHarvest} | Crew: ${hiredCrew.length}/3 (${crewMorale}% morale, ${crewWage}/min)${factionTag}`;
+
+  if (!document.getElementById('enginePartLabel')) {
+    const el = document.createElement('div');
+    el.id = 'enginePartLabel';
+    el.style.color = '#9cd9ff';
+    el.style.marginTop = '4px';
+    document.getElementById('hudContent').appendChild(el);
+  }
+  const engineTotals = getShipEngineAggregateStats(gameWorld.ship);
+  document.getElementById('enginePartLabel').textContent = `\uD83D\uDD29 Parts T/W/E/H: ${engineTotals.thrust}/${engineTotals.weight}/${engineTotals.efficiency}/${engineTotals.heat} | Total Score: ${Math.floor(gameWorld.totalScoreEarned || gameWorld.score || 0)}`;
   
   // Calculate difficulty level based on score
   const difficultyLevel = 1 + Math.floor(gameWorld.score / 500);
