@@ -1,121 +1,71 @@
-## ▶️ Play Now
+Play Now
 
-🔗 **Live Demo:** https://cookierider282.github.io/starfall/
+Live Demo: https://cookierider282.github.io/starfall/
 
----
+Starfall — A 3D Space Sandbox
 
-# 🌌 Starfall — A Living Galaxy Sandbox
+Starfall is a procedural 3D space sandbox I built from scratch in JavaScript. You fly around an infinite galaxy, build ships, fight AI civilizations, terraform planets, and mess with star systems. Nothing is scripted. Everything runs on its own.
 
-**Starfall** is a fully procedural **3D space sandbox RPG** where players explore an endless galaxy, design and engineer ships, build civilizations, terraform planets, and reshape entire star systems.
+What You Can Do
+Explore
+Procedurally generated star systems with planets, moons, asteroid belts, nebulae, and black holes
+Random cosmic events and anomalies
+No two playthroughs look the same
+Fly
+Full 3D flight with gravity and orbital mechanics
+Atmospheric entry, planetary landing, docking
+Combat maneuvering
+Build Ships
+Modular ship construction from individual parts
+Engines, fuel tanks, reactors, weapons, shields
+Real-time 3D preview of your build
+Performance changes based on what you actually put on the ship
+Watch Civilizations Do Their Thing
+AI civilizations run independently with their own governments, economies, and militaries
+Factions expand, collapse, declare war, form alliances
+You can interact with them or just watch the galaxy play out
+Engineer Planets
+Terraform atmospheres
+Move moons around
+Build artificial rings
+Detonate stars (carefully)
+Dyson swarms for passive income
+Build Bases
+Planetary surface bases and orbital stations
+Refueling, crafting, trading, upgrades
+Beacon system to navigate back
+Trade and Mine
+Resource gathering through mining, salvaging, and crafting
+Markets vary by planet
+Prices shift dynamically
+Long progression tree
+Deploy Drones
+Combat and harvester drones
+AI wingmen that fight alongside you
+Large-scale faction fleet battles
+UI
+HUD with minimap
+Cockpit view
+Mission system
+Achievements
+Full save and load for the entire world state
+The Point
 
-This is not a scripted story game.  
-This is a **living universe simulation**.
+There’s no story. The galaxy runs on layered systems that interact with each other, and whatever comes out of that is your experience. Two players will never have the same game.
 
-Every system is dynamic. Every civilization evolves. Every decision can ripple across the galaxy.
+Tech
+HTML5
+JavaScript (ES Modules)
+WebGL / Three.js-style rendering
+All procedural generation and simulation systems are custom built
+Status
 
----
+Actively in development. Core systems work. Adding more physics, deeper AI, and expanded engineering mechanics over time.
 
-## 🚀 Core Features
+Support
 
-### 🌍 Procedural Universe
-- Infinite procedural star systems
-- Planets, moons, asteroid belts, nebulae, black holes
-- Dynamic cosmic events & anomalies
+Star the repo, report bugs, suggest features. Don’t copy the code without crediting the original author.
 
-### 🛸 Advanced 3D Space Flight
-- Full 3D movement
-- Realistic gravity and orbital mechanics
-- Atmospheric entry & landing
-- Smooth takeoff, docking, and combat control
+License
 
-### ⚙️ Modular Ship Builder
-- Build ships from modular components
-- Swap engines, tanks, reactors, weapons, and modules
-- Real-time 3D preview
-- Engineering-driven performance system
-
-### 🧠 AI Civilizations & Galactic Simulation
-- Fully simulated AI civilizations
-- Government, economy, law, and war systems
-- Factions rise, fall, expand, collapse, and adapt
-- Dynamic diplomacy, alliances, and large-scale wars
-
-### 🏗️ Planetary Engineering & Megastructures
-- Terraform atmospheres
-- Move moons
-- Create artificial rings
-- Trigger controlled star detonations
-- Build Dyson swarms for massive passive income
-
-### 🛰️ Bases & Space Stations
-- Build planetary bases
-- Multi-tier orbital stations
-- Refueling, crafting, trading, and upgrades
-- Return-to-base beacon navigation
-
-### 💰 Economy & Resource Systems
-- Mining, salvaging, trading, and crafting
-- Planet-specific markets
-- Dynamic resource pricing
-- Deep progression tree
-
-### 🤖 Drones & Fleet Support
-- Combat drones
-- Harvester drones
-- AI wingmen
-- Faction fleet warfare
-
-### 🎮 UI & Gameplay Systems
-- Advanced HUD + minimap
-- Cockpit view mode
-- Mission system
-- Achievements & progression
-- Full save / restore world-state system
-
----
-
-## 🌠 Philosophy
-
-Starfall is built around **emergent gameplay** — instead of scripted events, complex systems interact to generate endless unpredictable outcomes.
-
-You don't follow a story.  
-**You create one.**
-
----
-
-## 🛠️ Tech Stack
-
-- **HTML5**
-- **JavaScript (ES Modules)**
-- **WebGL / Three.js-style rendering**
-- Custom procedural generation & simulation systems
-
----
-
-## 🧪 Development Status
-
-Starfall is actively in development.  
-Major systems are functional and expanding rapidly.
-
-Expect:
-- Frequent updates
-- New physics systems
-- Deeper AI simulation
-- Expanded galactic engineering
-- More emergent mechanics
-
----
-
-## ⭐ Support the Project
-
-If you like the concept:
-- ⭐ Star the repo
-- 🐛 Report issues
-- 💡 Suggest features
-- Please do not blatantly copy the code or use it without credit from the original author. 
-
----
-
-## 🪐 License
-
-MIT License — free to explore, learn from, and modify.
+MIT License.
